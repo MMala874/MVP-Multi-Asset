@@ -26,7 +26,7 @@ from configs.models import (
     Validation,
     WalkForward,
 )
-from risk._types import Side, SignalIntent
+from desk_types import Side, SignalIntent
 from validation.filter_tuner import _apply_filters
 
 

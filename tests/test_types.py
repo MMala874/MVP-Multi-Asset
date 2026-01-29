@@ -1,26 +1,18 @@
 from dataclasses import FrozenInstanceError
 from datetime import datetime
-import importlib.util
-import sys
-from pathlib import Path
 
 import pytest
 
-_TYPES_PATH = Path(__file__).resolve().parents[1] / "types" / "__init__.py"
-_spec = importlib.util.spec_from_file_location("project_types", _TYPES_PATH)
-_types_module = importlib.util.module_from_spec(_spec)
-sys.modules["project_types"] = _types_module
-assert _spec and _spec.loader
-_spec.loader.exec_module(_types_module)
-
-Fill = _types_module.Fill
-OrderIntent = _types_module.OrderIntent
-OrderType = _types_module.OrderType
-Position = _types_module.Position
-Scenario = _types_module.Scenario
-Side = _types_module.Side
-SignalIntent = _types_module.SignalIntent
-SystemState = _types_module.SystemState
+from desk_types import (
+    Fill,
+    OrderIntent,
+    OrderType,
+    Position,
+    Scenario,
+    Side,
+    SignalIntent,
+    SystemState,
+)
 
 
 def _sample_datetime() -> datetime:

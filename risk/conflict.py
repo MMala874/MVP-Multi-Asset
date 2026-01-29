@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List
 
-from risk._types import Side, SignalIntent
+from desk_types import Side, SignalIntent
 
 
 def resolve_conflicts(

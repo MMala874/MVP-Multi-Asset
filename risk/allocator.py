@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, TYPE_CHECKING
 
-from risk._types import OrderIntent, OrderType, SignalIntent
+from desk_types import OrderIntent, OrderType, SignalIntent
 
 if TYPE_CHECKING:
     from configs.models import Config

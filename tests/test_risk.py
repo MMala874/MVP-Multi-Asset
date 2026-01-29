@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from types import SimpleNamespace
 
+from desk_types import Side, SignalIntent
 from risk.allocator import RiskAllocator
 from risk.conflict import resolve_conflicts
-from risk._types import Side, SignalIntent
 
 
 def _signal(strategy_id: str, symbol: str, side: Side, sl_points: float | None) -> SignalIntent:
