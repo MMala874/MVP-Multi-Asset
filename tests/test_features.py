@@ -51,3 +51,21 @@ def test_rolling_percentile_no_lookahead():
 
     recomputed = rolling_percentile(modified, window, 50).iat[t]
     assert np.isclose(original, recomputed, equal_nan=True)
+
+
+def test_rolling_percentile_no_lookahead_multiple_thresholds():
+    atr_pct = pd.Series([0.5, 1.0, 0.8, 1.2, 1.5, 0.9, 1.1, 1.3, 1.4, 1.6], dtype=float)
+    window = 5
+    t = 6
+
+    p35_original = rolling_percentile(atr_pct, window, 35).iat[t]
+    p75_original = rolling_percentile(atr_pct, window, 75).iat[t]
+
+    modified = atr_pct.copy()
+    modified.iloc[t + 1 :] = modified.iloc[t + 1 :] + 5.0
+
+    p35_modified = rolling_percentile(modified, window, 35).iat[t]
+    p75_modified = rolling_percentile(modified, window, 75).iat[t]
+
+    assert np.isclose(p35_original, p35_modified, equal_nan=True)
+    assert np.isclose(p75_original, p75_modified, equal_nan=True)

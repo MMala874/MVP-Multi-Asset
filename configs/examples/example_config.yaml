@@ -8,6 +8,8 @@ bar_contract:
   signal_on: close
   fill_on: open_next
   allow_bar0: false
+regime:
+  atr_pct_window: 960
 strategies:
   enabled:
     - S1_TREND_EMA_ATR_ADX

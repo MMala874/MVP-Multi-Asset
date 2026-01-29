@@ -7,12 +7,13 @@ import importlib.util
 import sys
 from typing import Any, Dict, Iterable, List
 
+import numpy as np
 import pandas as pd
 
 from backtest.trade_log import TRADE_LOG_COLUMNS
 from configs.models import Config
 from features.indicators import adx, atr, ema
-from features.regime import classify_vol_regime, compute_atr_pct
+from features.regime import compute_atr_pct, rolling_percentile
 from risk.allocator import RiskAllocator
 from risk.conflict import resolve_conflicts
 
@@ -59,7 +60,7 @@ class LiveOrchestrator:
             self._manage_positions_stub(new_bar_data)
             return []
 
-        prepared = _prepare_features(new_bar_data, self._strategies)
+        prepared = _prepare_features(new_bar_data, self._strategies, self._config)
         orders: List[OrderIntent] = []
 
         for symbol, df in prepared.items():
@@ -150,6 +151,7 @@ def _load_strategies(config: Config) -> List[_StrategySpec]:
 def _prepare_features(
     df_by_symbol: Dict[str, pd.DataFrame],
     strategies: Iterable[_StrategySpec],
+    config: Config,
 ) -> Dict[str, pd.DataFrame]:
     prepared: Dict[str, pd.DataFrame] = {}
     for symbol, df in df_by_symbol.items():
@@ -162,7 +164,7 @@ def _prepare_features(
         if "atr" not in df_local:
             df_local["atr"] = atr(df_local, 14)
 
-        df_local["regime_snapshot"] = _compute_regime(df_local)
+        df_local["regime_snapshot"] = _compute_regime(df_local, config.regime.atr_pct_window)
         prepared[symbol] = df_local
     return prepared
 
@@ -206,16 +208,24 @@ def _apply_strategy_features(df: pd.DataFrame, spec: _StrategySpec) -> pd.DataFr
     return df
 
 
-def _compute_regime(df: pd.DataFrame) -> pd.Series:
+def _compute_regime(df: pd.DataFrame, window: int) -> pd.Series:
     if "atr" not in df:
         return pd.Series(["UNKNOWN"] * len(df), index=df.index)
     atr_pct = compute_atr_pct(df, atr_n=1)
-    valid = atr_pct.dropna()
-    if valid.empty:
-        return pd.Series(["UNKNOWN"] * len(df), index=df.index)
-    p35 = float(valid.quantile(0.35))
-    p75 = float(valid.quantile(0.75))
-    return classify_vol_regime(atr_pct, p35, p75)
+    p35_series = rolling_percentile(atr_pct, window=window, q=35)
+    p75_series = rolling_percentile(atr_pct, window=window, q=75)
+    regime = pd.Series(["UNKNOWN"] * len(df), index=df.index)
+    valid_mask = atr_pct.notna() & p35_series.notna() & p75_series.notna()
+    if valid_mask.any():
+        atr_vals = atr_pct[valid_mask]
+        p35_vals = p35_series[valid_mask]
+        p75_vals = p75_series[valid_mask]
+        regime.loc[valid_mask] = np.where(
+            atr_vals < p35_vals,
+            "LOW",
+            np.where(atr_vals < p75_vals, "MID", "HIGH"),
+        )
+    return regime
 
 
 def _resolve_time(df: pd.DataFrame, idx: int) -> datetime:
