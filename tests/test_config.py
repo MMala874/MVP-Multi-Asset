@@ -18,6 +18,7 @@ def load_example_data():
 def test_load_example_config():
     config = load_config(EXAMPLE_PATH)
     assert isinstance(config, Config)
+    assert config == Config.model_validate(load_example_data())
 
 
 def test_load_config_accepts_str_path():
