@@ -10,7 +10,7 @@ import pandas as pd
 from configs.models import Config
 from execution.cost_model import CostModel
 from execution.fill_rules import get_fill_price
-from features.indicators import adx, atr, ema
+from features.indicators import adx, atr, ema, slope
 from features.regime import compute_atr_pct, rolling_percentile
 from risk.allocator import RiskAllocator
 from risk.conflict import resolve_conflicts
@@ -122,8 +122,11 @@ def _apply_strategy_features(df: pd.DataFrame, spec: _StrategySpec) -> pd.DataFr
     elif spec.name == "S2_MR_ZSCORE_EMA_REGIME":
         ema_base = int(spec.params.get("ema_regime", spec.params.get("ema_base", 200)))
         adx_period = int(spec.params.get("adx_period", 14))
+        slope_window = int(spec.params.get("slope_window", 20))
         if "ema_base" not in df:
             df["ema_base"] = ema(df["close"], ema_base)
+        if "ema_slope" not in df:
+            df["ema_slope"] = slope(df["ema_base"], slope_window)
         if "adx" not in df:
             df["adx"] = adx(df, adx_period)
     elif spec.name == "S3_BREAKOUT_ATR_REGIME_EMA200":

@@ -8,7 +8,7 @@ from execution.fill_rules import get_fill_price
 from features.indicators import atr, ema, slope, zscore
 from features.regime import compute_atr_pct, rolling_percentile
 from backtest.trade_log import TRADE_LOG_COLUMNS
-from backtest.orchestrator import BacktestOrchestrator, _compute_regime
+from backtest.orchestrator import BacktestOrchestrator, _StrategySpec, _apply_strategy_features, _compute_regime
 from configs.models import (
     BarContract,
     Config,
@@ -91,6 +91,33 @@ def test_atr_pct_and_regime_ignore_future_data() -> None:
 
     assert np.isclose(atr_pct_original, atr_pct_modified, equal_nan=True)
     assert regime_original == regime_modified
+
+
+def test_s2_ema_slope_feature_ignores_future_data() -> None:
+    df = pd.DataFrame(
+        {
+            "open": [10.0, 10.2, 10.4, 10.3, 10.6, 10.8, 11.0],
+            "high": [10.5, 10.6, 10.8, 10.7, 11.0, 11.2, 11.4],
+            "low": [9.8, 10.0, 10.2, 10.1, 10.4, 10.6, 10.8],
+            "close": [10.1, 10.3, 10.5, 10.4, 10.7, 10.9, 11.1],
+        }
+    )
+    t = 4
+    spec = _StrategySpec(
+        name="S2_MR_ZSCORE_EMA_REGIME",
+        module=None,
+        params={"ema_regime": 3, "adx_period": 2, "slope_window": 3},
+    )
+
+    prepared = _apply_strategy_features(df.copy(), spec)
+    ema_slope_original = prepared["ema_slope"].iat[t]
+
+    df_modified = df.copy()
+    df_modified.loc[t + 1 :, "close"] = df_modified.loc[t + 1 :, "close"] + 50.0
+    prepared_modified = _apply_strategy_features(df_modified, spec)
+    ema_slope_modified = prepared_modified["ema_slope"].iat[t]
+
+    assert np.isclose(ema_slope_original, ema_slope_modified, equal_nan=True)
 
 
 def test_bar_contract_fill_is_open_next() -> None:

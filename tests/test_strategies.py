@@ -40,6 +40,7 @@ def _make_base_df(rows: int = 60) -> pd.DataFrame:
     df["atr"] = 1.2
     df["adx"] = 25.0
     df["ema_base"] = close.ewm(span=20, adjust=False).mean()
+    df["ema_slope"] = 0.0
     df["ema200"] = close.ewm(span=200, adjust=False).mean()
     return df
 
@@ -80,6 +81,7 @@ def test_strategies_no_t_plus_1():
     future_df.loc[idx + 1 :, "ema_fast"] = 999.0
     future_df.loc[idx + 1 :, "ema_slow"] = 999.0
     future_df.loc[idx + 1 :, "ema_base"] = 999.0
+    future_df.loc[idx + 1 :, "ema_slope"] = 999.0
     future_df.loc[idx + 1 :, "ema200"] = 999.0
     future_df.loc[idx + 1 :, "atr"] = 9.0
     future_df.loc[idx + 1 :, "adx"] = 99.0
@@ -101,6 +103,7 @@ def test_tags_present():
     df["atr"] = [1.5] * rows
     df["adx"] = [15.0] * rows
     df["ema_base"] = [100.0] * rows
+    df["ema_slope"] = [0.0] * rows
     df["ema200"] = [90.0] * rows
 
     idx = rows - 1
