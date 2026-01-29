@@ -20,6 +20,11 @@ def test_load_example_config():
     assert isinstance(config, Config)
 
 
+def test_load_config_accepts_str_path():
+    config = load_config(str(EXAMPLE_PATH))
+    assert isinstance(config, Config)
+
+
 def test_allow_bar0_false_only():
     data = load_example_data()
     data["bar_contract"]["allow_bar0"] = True
