@@ -2,9 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
-import importlib.util
-import sys
 from typing import Any, Dict, Iterable, List
 
 import numpy as np
@@ -16,17 +13,7 @@ from features.indicators import adx, atr, ema
 from features.regime import compute_atr_pct, rolling_percentile
 from risk.allocator import RiskAllocator
 from risk.conflict import resolve_conflicts
-
-_TYPES_PATH = Path(__file__).resolve().parents[1] / "types" / "__init__.py"
-_spec = importlib.util.spec_from_file_location("project_types", _TYPES_PATH)
-_types_module = importlib.util.module_from_spec(_spec)
-sys.modules.setdefault("project_types", _types_module)
-assert _spec and _spec.loader
-_spec.loader.exec_module(_types_module)
-
-Side = _types_module.Side
-OrderIntent = _types_module.OrderIntent
-SystemState = _types_module.SystemState
+from desk_types import OrderIntent, Side, SystemState
 
 STRATEGY_MAP = {
     "S1_TREND_EMA_ATR_ADX": "strategies.s1_trend_ema_atr_adx",
