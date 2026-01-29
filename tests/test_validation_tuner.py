@@ -5,6 +5,7 @@ from typing import Dict, List
 import pandas as pd
 
 from validation.filter_tuner import FilterTuner
+from validation.filter_tuner import _apply_filters
 
 
 def _base_config() -> Dict[str, object]:
@@ -61,3 +62,37 @@ def test_score_monotonic_penalties() -> None:
     worse_duration = tuner._score(expectancy=1.0, max_dd=-0.5, dd_duration=5.0, cost_sensitivity=0.1)
     assert worse_dd < base
     assert worse_duration < base
+
+
+def test_val_thresholds_ignore_test_data() -> None:
+    index = pd.RangeIndex(101)
+    train_values = list(range(61))
+    val_values = list(range(50, 70))
+    test_values_high = list(range(1000, 1020))
+    test_values_low = list(range(-1000, -980))
+
+    def _build_df(test_values: List[int]) -> pd.DataFrame:
+        values = train_values + val_values + test_values
+        return pd.DataFrame(
+            {
+                "pnl": [0.0] * len(values),
+                "atr_pct": values,
+            },
+            index=index,
+        )
+
+    params = {
+        "atr_pct_percentile_low": 0.2,
+        "atr_pct_percentile_high": 0.8,
+        "spike_block": False,
+    }
+    train_idx = range(0, 61)
+    val_idx = range(61, 81)
+
+    df_high = _build_df(test_values_high)
+    df_low = _build_df(test_values_low)
+
+    filtered_high = _apply_filters("S3_BREAKOUT_ATR_REGIME_EMA200", params, df_high, train_idx, val_idx)
+    filtered_low = _apply_filters("S3_BREAKOUT_ATR_REGIME_EMA200", params, df_low, train_idx, val_idx)
+
+    assert list(filtered_high.index) == list(filtered_low.index)
