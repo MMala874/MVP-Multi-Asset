@@ -43,11 +43,18 @@ class BarContract(StrictBaseModel):
 
 class Regime(StrictBaseModel):
     atr_pct_window: int = 960
+    atr_pct_n: int = 14
 
     @validator("atr_pct_window")
     def atr_pct_window_positive(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("atr_pct_window must be > 0")
+        return value
+
+    @validator("atr_pct_n")
+    def atr_pct_n_positive(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("atr_pct_n must be > 0")
         return value
 
 
