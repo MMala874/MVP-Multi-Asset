@@ -1,15 +1,8 @@
+"""Re-export risk types from the canonical desk_types modules."""
+
 from __future__ import annotations
 
-from desk_types import (
-    Fill,
-    OrderIntent,
-    OrderType,
-    Position,
-    Scenario,
-    SignalIntent,
-    Side,
-    SystemState,
-)
+from desk_types import Fill, OrderIntent, OrderType, Position, Scenario, SignalIntent, Side, SystemState
 
 __all__ = [
     "Fill",
