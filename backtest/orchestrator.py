@@ -183,11 +183,18 @@ def _run_scenario(
             for spec in strategies:
                 df_hist = df.iloc[: idx + 1].copy()
                 idx_hist = len(df_hist) - 1
+                if isinstance(df_hist.index, pd.DatetimeIndex):
+                    now_time = df_hist.index[-1]
+                elif "time" in df_hist.columns:
+                    now_time = df_hist["time"].iloc[-1]
+                else:
+                    now_time = _resolve_time(df_hist, idx_hist)
                 ctx = {
                     "df": df_hist,
                     "idx": idx_hist,
                     "symbol": symbol,
                     "current_time": signal_time,
+                    "now_time": now_time,
                 }
                 ctx["config"] = spec.params
                 signal = spec.module.generate_signal(ctx)

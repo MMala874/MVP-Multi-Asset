@@ -30,10 +30,10 @@ def _get_param(config: Dict[str, Any], key: str, default: Any) -> Any:
     return config.get(key, default)
 
 
-def _rolling_percentile(series: pd.Series, window: int, percentile: float) -> Optional[float]:
-    if len(series) < window:
+def _rolling_percentile(series: pd.Series, idx: int, window: int, percentile: float) -> Optional[float]:
+    if idx + 1 < window:
         return None
-    window_series = series.iloc[-window:].dropna()
+    window_series = series.iloc[idx - window + 1 : idx + 1].dropna()
     if len(window_series) < window:
         return None
     return float(np.percentile(window_series.to_numpy(), percentile))
@@ -56,21 +56,21 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     p_low = float(_get_param(config, "p_low", 20.0))
     breakout_window = int(_get_param(config, "breakout_window", 20))
 
-    closes = df[close_col].iloc[: idx + 1]
-    highs = df[high_col].iloc[: idx + 1]
-    lows = df[low_col].iloc[: idx + 1]
-    atr_values = df[atr_col].iloc[: idx + 1]
+    closes = df[close_col]
+    highs = df[high_col]
+    lows = df[low_col]
+    atr_values = df[atr_col]
     ema200_value = df[ema200_col].iloc[idx]
 
-    close_value = closes.iloc[-1]
-    atr_value = atr_values.iloc[-1]
+    close_value = closes.iloc[idx]
+    atr_value = atr_values.iloc[idx]
 
     tags: Dict[str, str] = {}
 
     atr_pct_series = atr_values / closes
     atr_pct_value = atr_value / close_value if close_value != 0 else np.nan
     compression_threshold = _rolling_percentile(
-        atr_pct_series, compression_window, p_low
+        atr_pct_series, idx, compression_window, p_low
     )
 
     compression_pass = False
@@ -81,8 +81,8 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
 
     breakout_dir = "none"
     if idx >= breakout_window:
-        range_high = highs.iloc[-breakout_window - 1 : -1].max()
-        range_low = lows.iloc[-breakout_window - 1 : -1].min()
+        range_high = highs.iloc[idx - breakout_window : idx].max()
+        range_low = lows.iloc[idx - breakout_window : idx].min()
         if close_value > range_high:
             breakout_dir = "up"
         elif close_value < range_low:
