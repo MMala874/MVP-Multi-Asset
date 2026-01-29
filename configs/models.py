@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Literal, Tuple
 
-from pydantic import BaseModel, root_validator, validator
+from pydantic import BaseModel, model_validator, validator
 
 
 ALLOWED_STRATEGIES = {
@@ -79,14 +79,12 @@ class Strategies(StrictBaseModel):
             raise ValueError(f"params missing strategies: {sorted(missing)}")
         return value
 
-    @root_validator
-    def params_cover_enabled(cls, values: Dict[str, object]) -> Dict[str, object]:
-        enabled = values.get("enabled", [])
-        params = values.get("params", {})
-        missing = [name for name in enabled if name not in params]
+    @model_validator(mode="after")
+    def params_cover_enabled(self) -> "Strategies":
+        missing = [name for name in self.enabled if name not in self.params]
         if missing:
             raise ValueError(f"params missing enabled strategies: {missing}")
-        return values
+        return self
 
 
 class RiskCaps(StrictBaseModel):
@@ -104,15 +102,13 @@ class Risk(StrictBaseModel):
     dd_week_limit: float
     max_execution_errors: int
 
-    @root_validator
-    def priority_requires_order(cls, values: Dict[str, object]) -> Dict[str, object]:
-        conflict_policy = values.get("conflict_policy")
-        priority_order = values.get("priority_order")
-        if conflict_policy == "priority" and not priority_order:
+    @model_validator(mode="after")
+    def priority_requires_order(self) -> "Risk":
+        if self.conflict_policy == "priority" and not self.priority_order:
             raise ValueError("priority_order must be provided when conflict_policy is priority")
-        if conflict_policy == "netting" and priority_order:
+        if self.conflict_policy == "netting" and self.priority_order:
             raise ValueError("priority_order must be empty when conflict_policy is netting")
-        return values
+        return self
 
 
 class SlippageModel(StrictBaseModel):
@@ -148,21 +144,21 @@ class WalkForward(StrictBaseModel):
     test_start: str | None = None
     test_end: str | None = None
 
-    @root_validator
-    def require_lengths_or_dates(cls, values: Dict[str, object]) -> Dict[str, object]:
-        lengths = [values.get("train"), values.get("val"), values.get("test")]
+    @model_validator(mode="after")
+    def require_lengths_or_dates(self) -> "WalkForward":
+        lengths = [self.train, self.val, self.test]
         date_fields = [
-            values.get("train_start"),
-            values.get("train_end"),
-            values.get("val_start"),
-            values.get("val_end"),
-            values.get("test_start"),
-            values.get("test_end"),
+            self.train_start,
+            self.train_end,
+            self.val_start,
+            self.val_end,
+            self.test_start,
+            self.test_end,
         ]
         if all(value is not None for value in lengths):
-            return values
+            return self
         if all(value is not None for value in date_fields):
-            return values
+            return self
         raise ValueError("walk_forward must include train/val/test lengths or full date splits")
 
 
@@ -176,13 +172,11 @@ class MonteCarlo1(StrictBaseModel):
     block_max: int
     n_sims: int
 
-    @root_validator
-    def blocks_valid(cls, values: Dict[str, object]) -> Dict[str, object]:
-        block_min = values.get("block_min")
-        block_max = values.get("block_max")
-        if block_min is not None and block_max is not None and block_min > block_max:
+    @model_validator(mode="after")
+    def blocks_valid(self) -> "MonteCarlo1":
+        if self.block_min > self.block_max:
             raise ValueError("block_min must be <= block_max")
-        return values
+        return self
 
 
 class MonteCarlo2(StrictBaseModel):
@@ -227,13 +221,9 @@ class Config(StrictBaseModel):
     outputs: Outputs
     reproducibility: Reproducibility
 
-    @root_validator
-    def costs_cover_symbols(cls, values: Dict[str, object]) -> Dict[str, object]:
-        universe = values.get("universe")
-        costs = values.get("costs")
-        if universe is None or costs is None:
-            return values
-        missing = set(universe.symbols) - set(costs.spread_baseline_pips.keys())
+    @model_validator(mode="after")
+    def costs_cover_symbols(self) -> "Config":
+        missing = set(self.universe.symbols) - set(self.costs.spread_baseline_pips.keys())
         if missing:
             raise ValueError(f"spread_baseline_pips missing symbols: {sorted(missing)}")
-        return values
+        return self

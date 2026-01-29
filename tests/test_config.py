@@ -24,19 +24,19 @@ def test_allow_bar0_false_only():
     data = load_example_data()
     data["bar_contract"]["allow_bar0"] = True
     with pytest.raises(ValidationError):
-        Config.parse_obj(data)
+        Config.model_validate(data)
 
 
 def test_bar_contract_must_be_close_open_next():
     data = load_example_data()
     data["bar_contract"]["signal_on"] = "open"
     with pytest.raises(ValidationError):
-        Config.parse_obj(data)
+        Config.model_validate(data)
 
     data = load_example_data()
     data["bar_contract"]["fill_on"] = "close"
     with pytest.raises(ValidationError):
-        Config.parse_obj(data)
+        Config.model_validate(data)
 
 
 @pytest.mark.parametrize("missing_block", ["risk", "costs", "strategies"])
@@ -44,4 +44,4 @@ def test_missing_block_fails(missing_block):
     data = load_example_data()
     data.pop(missing_block)
     with pytest.raises(ValidationError):
-        Config.parse_obj(data)
+        Config.model_validate(data)
