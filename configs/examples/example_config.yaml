@@ -10,6 +10,7 @@ bar_contract:
   allow_bar0: false
 regime:
   atr_pct_window: 960
+  atr_pct_n: 14
 strategies:
   enabled:
     - S1_TREND_EMA_ATR_ADX

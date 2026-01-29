@@ -100,7 +100,11 @@ def _prepare_features(
         if "atr" not in df_local:
             df_local["atr"] = atr(df_local, 14)
 
-        df_local["regime_snapshot"] = _compute_regime(df_local, config.regime.atr_pct_window)
+        df_local["regime_snapshot"] = _compute_regime(
+            df_local,
+            window=config.regime.atr_pct_window,
+            atr_n=config.regime.atr_pct_n,
+        )
         prepared[symbol] = df_local
     return prepared
 
@@ -144,10 +148,10 @@ def _apply_strategy_features(df: pd.DataFrame, spec: _StrategySpec) -> pd.DataFr
     return df
 
 
-def _compute_regime(df: pd.DataFrame, window: int) -> pd.Series:
+def _compute_regime(df: pd.DataFrame, window: int, atr_n: int) -> pd.Series:
     if "atr" not in df:
         return pd.Series(["UNKNOWN"] * len(df), index=df.index)
-    atr_pct = compute_atr_pct(df, atr_n=1)
+    atr_pct = compute_atr_pct(df, atr_n=atr_n)
     p35_series = rolling_percentile(atr_pct, window=window, q=35)
     p75_series = rolling_percentile(atr_pct, window=window, q=75)
     regime = pd.Series(["UNKNOWN"] * len(df), index=df.index)

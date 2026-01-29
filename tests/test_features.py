@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 from features.indicators import atr, ema, slope, zscore
-from features.regime import rolling_percentile
+from features.regime import compute_atr_pct, rolling_percentile
 
 
 def test_no_lookahead():
@@ -37,6 +37,20 @@ def test_atr_basic():
     assert np.isnan(result.iat[0])
     assert result.iat[1] == 2
     assert result.iat[2] == 2
+
+
+def test_atr_pct_window_changes_values():
+    df = pd.DataFrame(
+        {
+            "high": [10, 11, 12, 11, 13, 12],
+            "low": [9, 9.5, 10, 9.8, 11, 10.5],
+            "close": [9.5, 10.2, 11, 10.5, 12.2, 11.3],
+        }
+    )
+    atr_pct_1 = compute_atr_pct(df, atr_n=1)
+    atr_pct_3 = compute_atr_pct(df, atr_n=3)
+    idx = 4
+    assert not np.isclose(atr_pct_1.iat[idx], atr_pct_3.iat[idx], equal_nan=True)
 
 
 def test_rolling_percentile_no_lookahead():

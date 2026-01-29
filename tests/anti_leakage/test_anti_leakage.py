@@ -6,9 +6,9 @@ import pandas as pd
 
 from execution.fill_rules import get_fill_price
 from features.indicators import atr, ema, slope, zscore
-from features.regime import rolling_percentile
+from features.regime import compute_atr_pct, rolling_percentile
 from backtest.trade_log import TRADE_LOG_COLUMNS
-from backtest.orchestrator import BacktestOrchestrator
+from backtest.orchestrator import BacktestOrchestrator, _compute_regime
 from configs.models import (
     BarContract,
     Config,
@@ -63,6 +63,34 @@ def test_feature_functions_ignore_future_data() -> None:
     df_modified.loc[3, "close"] = 50.0
     atr_modified = atr(df_modified, 2).iat[2]
     assert np.isclose(atr_original, atr_modified, equal_nan=True)
+
+
+def test_atr_pct_and_regime_ignore_future_data() -> None:
+    df = pd.DataFrame(
+        {
+            "open": [10.0, 10.2, 10.4, 10.3, 10.6, 10.8, 11.0, 11.1],
+            "high": [10.5, 10.6, 10.8, 10.7, 11.0, 11.2, 11.4, 11.5],
+            "low": [9.8, 10.0, 10.2, 10.1, 10.4, 10.6, 10.8, 10.9],
+            "close": [10.1, 10.3, 10.5, 10.4, 10.7, 10.9, 11.1, 11.2],
+        }
+    )
+    t = 5
+    atr_n = 3
+    window = 3
+
+    atr_pct_original = compute_atr_pct(df, atr_n=atr_n).iat[t]
+    regime_original = _compute_regime(df, window=window, atr_n=atr_n).iat[t]
+
+    df_modified = df.copy()
+    df_modified.loc[t + 1 :, "high"] = df_modified.loc[t + 1 :, "high"] + 50.0
+    df_modified.loc[t + 1 :, "low"] = df_modified.loc[t + 1 :, "low"] - 50.0
+    df_modified.loc[t + 1 :, "close"] = df_modified.loc[t + 1 :, "close"] + 25.0
+
+    atr_pct_modified = compute_atr_pct(df_modified, atr_n=atr_n).iat[t]
+    regime_modified = _compute_regime(df_modified, window=window, atr_n=atr_n).iat[t]
+
+    assert np.isclose(atr_pct_original, atr_pct_modified, equal_nan=True)
+    assert regime_original == regime_modified
 
 
 def test_bar_contract_fill_is_open_next() -> None:
