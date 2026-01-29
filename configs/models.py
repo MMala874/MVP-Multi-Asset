@@ -41,6 +41,16 @@ class BarContract(StrictBaseModel):
         return value
 
 
+class Regime(StrictBaseModel):
+    atr_pct_window: int = 960
+
+    @validator("atr_pct_window")
+    def atr_pct_window_positive(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("atr_pct_window must be > 0")
+        return value
+
+
 class Strategies(StrictBaseModel):
     enabled: List[str]
     params: Dict[str, Dict[str, object]]
@@ -201,6 +211,7 @@ class Reproducibility(StrictBaseModel):
 class Config(StrictBaseModel):
     universe: Universe
     bar_contract: BarContract
+    regime: Regime = Regime()
     strategies: Strategies
     risk: Risk
     costs: Costs
