@@ -156,11 +156,9 @@ def _apply_filters(
         mask &= df_val["slope"].abs() < float(params["slope_th"])
         return df_val.loc[mask]
     if strategy_key == "S3_BREAKOUT_ATR_REGIME_EMA200":
-        train = df.iloc[list(train_idx)]
         low = float(params["atr_pct_percentile_low"])
         high = float(params["atr_pct_percentile_high"])
-        low_th = float(train["atr_pct"].quantile(low))
-        high_th = float(train["atr_pct"].quantile(high))
+        low_th, high_th = _train_quantile_thresholds(df, train_idx, "atr_pct", low, high)
         mask = (df_val["atr_pct"] >= low_th) & (df_val["atr_pct"] <= high_th)
         if params.get("spike_block"):
             if "spike" in df_val.columns:
@@ -175,6 +173,19 @@ def _max_drawdown(pnl: pd.Series) -> float:
     if drawdown.empty:
         return 0.0
     return float(drawdown.min())
+
+
+def _train_quantile_thresholds(
+    df: pd.DataFrame,
+    train_idx: Sequence[int],
+    column: str,
+    low: float,
+    high: float,
+) -> tuple[float, float]:
+    train = df.iloc[list(train_idx)]
+    if train.empty:
+        raise ValueError("Train segment is empty; cannot compute quantile thresholds.")
+    return float(train[column].quantile(low)), float(train[column].quantile(high))
 
 
 def _max_drawdown_duration(pnl: pd.Series) -> int:
