@@ -6,13 +6,11 @@ from typing import Any, Dict, Optional, Set
 import pandas as pd
 
 from desk_types import Side, SignalIntent
-from features.indicators import slope
-
 STRATEGY_ID = "s2_mr_zscore_ema_regime"
 
 
 def required_features() -> Set[str]:
-    return {"close", "ema_base", "adx"}
+    return {"close", "ema_base", "ema_slope", "adx"}
 
 
 def _get_param(config: Dict[str, Any], key: str, default: Any) -> Any:
@@ -31,17 +29,6 @@ def _zscore(series: pd.Series, idx: int, window: int) -> Optional[float]:
     return float((series.iloc[idx] - mean) / std)
 
 
-def _rolling_slope(series: pd.Series, idx: int, window: int) -> Optional[float]:
-    if idx + 1 < window:
-        return None
-    window_series = series.iloc[: idx + 1]
-    slope_series = slope(window_series, window)
-    value = slope_series.iloc[-1]
-    if pd.isna(value):
-        return None
-    return float(value)
-
-
 def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     df: pd.DataFrame = ctx["df"]
     idx: int = ctx["idx"]
@@ -51,10 +38,10 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
 
     close_col = _get_param(config, "close_col", "close")
     ema_base_col = _get_param(config, "ema_base_col", "ema_base")
+    ema_slope_col = _get_param(config, "ema_slope_col", "ema_slope")
     adx_col = _get_param(config, "adx_col", "adx")
 
     z_window = int(_get_param(config, "z_window", 30))
-    slope_window = int(_get_param(config, "slope_window", 20))
     z_entry = float(_get_param(config, "z_entry", 2.0))
     adx_max = _get_param(config, "adx_max", 20.0)
     slope_th = float(_get_param(config, "slope_th", 0.01))
@@ -64,7 +51,9 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     adx_value = df[adx_col].iloc[idx]
 
     z_value = _zscore(closes - ema_base, idx, z_window)
-    slope_value = _rolling_slope(ema_base, idx, slope_window)
+    slope_value = df[ema_slope_col].iloc[idx]
+    if pd.isna(slope_value):
+        slope_value = None
 
     gate_pass = True
     if pd.isna(adx_value):
