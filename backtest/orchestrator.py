@@ -169,15 +169,16 @@ def _run_scenario(
     for symbol, df in df_by_symbol.items():
         for idx in range(len(df) - 1):
             signal_time = _resolve_time(df, idx)
-            context = {
-                "df": df,
-                "idx": idx,
-                "symbol": symbol,
-                "current_time": signal_time,
-            }
             signals = []
             for spec in strategies:
-                ctx = dict(context)
+                df_hist = df.iloc[: idx + 1].copy()
+                idx_hist = len(df_hist) - 1
+                ctx = {
+                    "df": df_hist,
+                    "idx": idx_hist,
+                    "symbol": symbol,
+                    "current_time": signal_time,
+                }
                 ctx["config"] = spec.params
                 signal = spec.module.generate_signal(ctx)
                 if signal.side == Side.FLAT:

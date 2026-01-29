@@ -1,10 +1,32 @@
-import pandas as pd
+import sys
+from types import ModuleType
+
 import numpy as np
+import pandas as pd
 
 from execution.fill_rules import get_fill_price
 from features.indicators import atr, ema, slope, zscore
 from features.regime import rolling_percentile
 from backtest.trade_log import TRADE_LOG_COLUMNS
+from backtest.orchestrator import BacktestOrchestrator
+from configs.models import (
+    BarContract,
+    Config,
+    Costs,
+    MonteCarlo,
+    MonteCarlo1,
+    MonteCarlo2,
+    Outputs,
+    Reproducibility,
+    Risk,
+    RiskCaps,
+    SlippageModel,
+    Strategies,
+    Universe,
+    Validation,
+    WalkForward,
+)
+from risk._types import Side, SignalIntent
 from validation.filter_tuner import _apply_filters
 
 
@@ -114,3 +136,103 @@ def test_trade_log_tracks_feature_time_bounds() -> None:
     )
 
     assert (trade_log["features_max_time_used"] <= trade_log["signal_time"]).all()
+
+
+def _make_dummy_config() -> Config:
+    return Config(
+        universe=Universe(symbols=["EURUSD"], timeframe="M1"),
+        bar_contract=BarContract(signal_on="close", fill_on="open_next", allow_bar0=False),
+        strategies=Strategies(
+            enabled=["DUMMY_ANTI_LEAK"],
+            params={"DUMMY_ANTI_LEAK": {}},
+        ),
+        risk=Risk(
+            r_base=1.0,
+            caps=RiskCaps(per_strategy=100.0, per_symbol=100.0, usd_exposure_cap=1_000_000.0),
+            conflict_policy="priority",
+            priority_order=["DUMMY_ANTI_LEAK"],
+            dd_day_limit=1.0,
+            dd_week_limit=1.0,
+            max_execution_errors=1,
+        ),
+        costs=Costs(
+            spread_baseline_pips={"EURUSD": 0.0},
+            slippage=SlippageModel(
+                slip_base=0.0,
+                slip_k=0.0,
+                spike_tr_atr_th=10.0,
+                spike_mult=1.0,
+            ),
+            scenarios={"A": 1.0, "B": 1.0, "C": 1.0},
+        ),
+        validation=Validation(walk_forward=WalkForward(train=1, val=1, test=1), perturb_core_params_pct=0.0),
+        montecarlo=MonteCarlo(
+            mc1=MonteCarlo1(block_min=1, block_max=1, n_sims=1),
+            mc2=MonteCarlo2(spread_noise_range=(1.0, 1.0), slippage_noise_range=(1.0, 1.0), n_sims=1),
+        ),
+        outputs=Outputs(runs_dir="./runs", write_trades_csv=False, write_report_json=False, write_mc_json=False),
+        reproducibility=Reproducibility(random_seed=1),
+    )
+
+
+def _make_price_df(n_bars: int) -> pd.DataFrame:
+    close = pd.Series(range(n_bars), dtype=float)
+    return pd.DataFrame(
+        {
+            "open": close + 0.01,
+            "high": close + 0.05,
+            "low": close - 0.05,
+            "close": close,
+        }
+    )
+
+
+def test_orchestrator_strategies_do_not_see_future(monkeypatch) -> None:
+    module = ModuleType("dummy_strategy")
+    module.captured = []
+
+    def generate_signal(ctx):
+        df = ctx["df"]
+        last_close = float(df["close"].iloc[-1])
+        side = Side.LONG if last_close > 100 else Side.SHORT
+        signal = SignalIntent(
+            strategy_id="dummy",
+            symbol=ctx["symbol"],
+            side=side,
+            signal_time=ctx["current_time"],
+            sl_points=1.0,
+            tp_points=None,
+            tags={"last_close": f"{last_close:.2f}"},
+        )
+        if ctx["idx"] == 50:
+            module.captured.append(signal)
+        return signal
+
+    module.generate_signal = generate_signal
+    monkeypatch.setitem(sys.modules, "dummy_strategy", module)
+
+    from backtest import orchestrator as orchestrator_module
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "STRATEGY_MAP",
+        {**orchestrator_module.STRATEGY_MAP, "DUMMY_ANTI_LEAK": "dummy_strategy"},
+    )
+
+    orchestrator = BacktestOrchestrator()
+    config = _make_dummy_config()
+
+    df = _make_price_df(100)
+    module.captured = []
+    orchestrator.run({"EURUSD": df}, config)
+    assert module.captured
+    baseline = module.captured[0].to_dict()
+
+    df_modified = df.copy()
+    df_modified.loc[80:, ["open", "high", "low", "close"]] += 200.0
+    module.captured = []
+    orchestrator.run({"EURUSD": df_modified}, config)
+    assert module.captured
+    modified = module.captured[0].to_dict()
+
+    assert baseline == modified
