@@ -31,21 +31,23 @@ def _get_param(config: Dict[str, Any], key: str, default: Any) -> Any:
     return config.get(key, default)
 
 
-def _zscore(series: pd.Series, window: int) -> Optional[float]:
-    if len(series) < window:
+def _zscore(series: pd.Series, idx: int, window: int) -> Optional[float]:
+    if idx + 1 < window:
         return None
-    rolling = series.rolling(window=window, min_periods=window)
+    window_series = series.iloc[: idx + 1]
+    rolling = window_series.rolling(window=window, min_periods=window)
     mean = rolling.mean().iloc[-1]
     std = rolling.std().iloc[-1]
     if pd.isna(mean) or pd.isna(std) or std == 0:
         return None
-    return float((series.iloc[-1] - mean) / std)
+    return float((series.iloc[idx] - mean) / std)
 
 
-def _rolling_slope(series: pd.Series, window: int) -> Optional[float]:
-    if len(series) < window:
+def _rolling_slope(series: pd.Series, idx: int, window: int) -> Optional[float]:
+    if idx + 1 < window:
         return None
-    slope_series = slope(series, window)
+    window_series = series.iloc[: idx + 1]
+    slope_series = slope(window_series, window)
     value = slope_series.iloc[-1]
     if pd.isna(value):
         return None
@@ -69,12 +71,12 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     adx_max = _get_param(config, "adx_max", 20.0)
     slope_th = float(_get_param(config, "slope_th", 0.01))
 
-    closes = df[close_col].iloc[: idx + 1]
-    ema_base = df[ema_base_col].iloc[: idx + 1]
+    closes = df[close_col]
+    ema_base = df[ema_base_col]
     adx_value = df[adx_col].iloc[idx]
 
-    z_value = _zscore(closes - ema_base, z_window)
-    slope_value = _rolling_slope(ema_base, slope_window)
+    z_value = _zscore(closes - ema_base, idx, z_window)
+    slope_value = _rolling_slope(ema_base, idx, slope_window)
 
     gate_pass = True
     if pd.isna(adx_value):
