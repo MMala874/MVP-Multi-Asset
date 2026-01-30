@@ -7,7 +7,7 @@ import pandas as pd
 
 from execution.fill_rules import get_fill_price
 from features.indicators import atr, ema, slope, zscore
-from features.regime import compute_atr_pct, rolling_percentile
+from features.regime import atr_pct_zscore, compute_atr_pct
 from backtest.trade_log import TRADE_LOG_COLUMNS
 from backtest.orchestrator import (
     BacktestOrchestrator,
@@ -132,17 +132,17 @@ def test_bar_contract_fill_is_open_next() -> None:
     assert get_fill_price(df, idx_t=0, side="buy") == 1.2
 
 
-def test_rolling_percentile_uses_rolling_window() -> None:
-    series = pd.Series([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], dtype=float)
+def test_atr_pct_zscore_uses_rolling_window() -> None:
+    series = pd.Series([0.5, 1.0, 0.8, 1.2, 1.5, 0.9, 1.1, 1.3, 1.4, 1.6], dtype=float)
     window = 5
-    t = 4
+    t = 6
 
-    original = rolling_percentile(series, window, 50).iat[t]
+    original = atr_pct_zscore(series, window=window).iat[t]
 
     modified = series.copy()
     modified.iloc[t + 1 :] = modified.iloc[t + 1 :] + 100
 
-    recomputed = rolling_percentile(modified, window, 50).iat[t]
+    recomputed = atr_pct_zscore(modified, window=window).iat[t]
     assert np.isclose(original, recomputed, equal_nan=True)
 
 

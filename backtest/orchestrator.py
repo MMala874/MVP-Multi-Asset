@@ -11,7 +11,7 @@ from configs.models import Config
 from execution.cost_model import CostModel
 from execution.fill_rules import get_fill_price
 from features.indicators import adx, atr, ema, slope
-from features.regime import atr_pct_zscore, spike_flag
+from features.regime import atr_pct_zscore, compute_atr_pct, spike_flag
 from risk.allocator import RiskAllocator
 from risk.conflict import resolve_conflicts
 
@@ -151,10 +151,10 @@ def _compute_regime(
     spike_th: float = 2.5,
 ) -> pd.Series:
     atr_series = atr(df, atr_n)
-    atr_pct = atr_series / df["close"] * 100
+    atr_pct = compute_atr_pct(df, atr_n=atr_n)
     z = atr_pct_zscore(atr_pct, window=window)
 
-    regime = pd.Series(["MID"] * len(df), index=df.index)
+    regime = pd.Series(["UNKNOWN"] * len(df), index=df.index)
     valid_mask = z.notna()
     if valid_mask.any():
         regime.loc[valid_mask] = np.where(

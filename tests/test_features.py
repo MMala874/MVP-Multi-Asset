@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 from features.indicators import atr, ema, slope, zscore
-from features.regime import compute_atr_pct, rolling_percentile
+from features.regime import atr_pct_zscore, compute_atr_pct
 
 
 def test_no_lookahead():
@@ -53,33 +53,15 @@ def test_atr_pct_window_changes_values():
     assert not np.isclose(atr_pct_1.iat[idx], atr_pct_3.iat[idx], equal_nan=True)
 
 
-def test_rolling_percentile_no_lookahead():
-    series = pd.Series([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], dtype=float)
-    window = 5
-    t = 4
-
-    original = rolling_percentile(series, window, 50).iat[t]
-
-    modified = series.copy()
-    modified.iloc[t + 1 :] = modified.iloc[t + 1 :] + 100
-
-    recomputed = rolling_percentile(modified, window, 50).iat[t]
-    assert np.isclose(original, recomputed, equal_nan=True)
-
-
-def test_rolling_percentile_no_lookahead_multiple_thresholds():
+def test_atr_pct_zscore_no_lookahead() -> None:
     atr_pct = pd.Series([0.5, 1.0, 0.8, 1.2, 1.5, 0.9, 1.1, 1.3, 1.4, 1.6], dtype=float)
     window = 5
     t = 6
 
-    p35_original = rolling_percentile(atr_pct, window, 35).iat[t]
-    p75_original = rolling_percentile(atr_pct, window, 75).iat[t]
+    z_original = atr_pct_zscore(atr_pct, window=window).iat[t]
 
     modified = atr_pct.copy()
     modified.iloc[t + 1 :] = modified.iloc[t + 1 :] + 5.0
 
-    p35_modified = rolling_percentile(modified, window, 35).iat[t]
-    p75_modified = rolling_percentile(modified, window, 75).iat[t]
-
-    assert np.isclose(p35_original, p35_modified, equal_nan=True)
-    assert np.isclose(p75_original, p75_modified, equal_nan=True)
+    z_modified = atr_pct_zscore(modified, window=window).iat[t]
+    assert np.isclose(z_original, z_modified, equal_nan=True)
