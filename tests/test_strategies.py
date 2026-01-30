@@ -137,3 +137,26 @@ def test_tags_present():
     s3_signal = S3.generate_signal(_ctx(df_breakout, idx, s3_config))
     assert s3_signal.side != Side.FLAT
     assert s3_signal.tags
+
+
+def test_s2_generate_signal_uses_precomputed_mr_z(monkeypatch):
+    df = pd.DataFrame(
+        {
+            "close": [100.0, 100.2, 100.4, 100.6, 100.8, 101.0],
+            "high": [101.0, 101.2, 101.4, 101.6, 101.8, 102.0],
+            "low": [99.0, 99.2, 99.4, 99.6, 99.8, 100.0],
+            "ema_base": [100.0] * 6,
+            "ema_slope": [0.0] * 6,
+            "adx": [10.0] * 6,
+            "mr_z": [0.0, 0.2, -0.1, 0.0, 2.5, 2.5],
+        }
+    )
+
+    def _raise(*_args, **_kwargs):
+        raise AssertionError("generate_signal should not call rolling()")
+
+    monkeypatch.setattr(pd.Series, "rolling", _raise, raising=True)
+
+    config = {"z_entry": 2.0, "adx_max": 20.0, "slope_th": 0.1}
+    signal = S2.generate_signal(_ctx(df, 4, config))
+    assert signal.side == Side.SHORT
