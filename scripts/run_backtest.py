@@ -78,7 +78,8 @@ def main() -> None:
     trades_path = out_dir / "trades.csv"
     report_path = out_dir / "report.json"
 
-    trades.to_csv(trades_path, index=False)
+    trades_output = trades.reindex(sorted(trades.columns), axis=1)
+    trades_output.to_csv(trades_path, index=False)
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
 
     _print_summary(trades, report)
