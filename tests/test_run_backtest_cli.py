@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -122,5 +123,13 @@ def test_run_backtest_cli_creates_outputs(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0
-    assert (out_dir / "trades.csv").exists()
-    assert (out_dir / "report.json").exists()
+    trades_path = out_dir / "trades.csv"
+    report_path = out_dir / "report.json"
+    assert trades_path.exists()
+    assert report_path.exists()
+
+    trades_header = trades_path.read_text(encoding="utf-8").splitlines()[0]
+    assert trades_header
+
+    report_data = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report_data
