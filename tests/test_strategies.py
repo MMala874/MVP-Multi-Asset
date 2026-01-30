@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from backtest.orchestrator import _StrategySpec, _apply_strategy_features
 from desk_types import Side
 
 _BASE_DIR = Path(__file__).resolve().parents[1]
@@ -42,18 +43,24 @@ def _make_base_df(rows: int = 60) -> pd.DataFrame:
     df["ema_base"] = close.ewm(span=20, adjust=False).mean()
     df["ema_slope"] = 0.0
     df["ema200"] = close.ewm(span=200, adjust=False).mean()
+    df["mr_z"] = 0.0
     return df
 
 
 def _ctx(df: pd.DataFrame, idx: int, config: dict) -> dict:
     return {
-        "df": df,
+        "cols": {col: df[col].to_numpy() for col in df.columns},
         "idx": idx,
         "symbol": "EURUSD",
         "current_time": _sample_time(),
         "config": config,
         "regime": {},
     }
+
+
+def _with_s3_features(df: pd.DataFrame, config: dict) -> pd.DataFrame:
+    spec = _StrategySpec(name="S3_BREAKOUT_ATR_REGIME_EMA200", module=None, params=config)
+    return _apply_strategy_features(df.copy(), spec)
 
 
 def test_strategies_no_t_plus_1():
@@ -72,7 +79,8 @@ def test_strategies_no_t_plus_1():
 
     s1_signal = S1.generate_signal(_ctx(base_df, idx, s1_config))
     s2_signal = S2.generate_signal(_ctx(base_df, idx, s2_config))
-    s3_signal = S3.generate_signal(_ctx(base_df, idx, s3_config))
+    base_df_s3 = _with_s3_features(base_df, s3_config)
+    s3_signal = S3.generate_signal(_ctx(base_df_s3, idx, s3_config))
 
     future_df = base_df.copy()
     future_df.loc[idx + 1 :, "close"] = 999.0
@@ -88,7 +96,8 @@ def test_strategies_no_t_plus_1():
 
     assert s1_signal == S1.generate_signal(_ctx(future_df, idx, s1_config))
     assert s2_signal == S2.generate_signal(_ctx(future_df, idx, s2_config))
-    assert s3_signal == S3.generate_signal(_ctx(future_df, idx, s3_config))
+    future_df_s3 = _with_s3_features(future_df, s3_config)
+    assert s3_signal == S3.generate_signal(_ctx(future_df_s3, idx, s3_config))
 
 
 def test_tags_present():
@@ -105,6 +114,7 @@ def test_tags_present():
     df["ema_base"] = [100.0] * rows
     df["ema_slope"] = [0.0] * rows
     df["ema200"] = [90.0] * rows
+    df["mr_z"] = [0.0] * rows
 
     idx = rows - 1
 
@@ -134,6 +144,7 @@ def test_tags_present():
     df_breakout.loc[idx, "atr"] = 0.5
 
     s3_config = {"compression_window": 10, "p_low": 30.0, "breakout_window": 5}
+    df_breakout = _with_s3_features(df_breakout, s3_config)
     s3_signal = S3.generate_signal(_ctx(df_breakout, idx, s3_config))
     assert s3_signal.side != Side.FLAT
     assert s3_signal.tags

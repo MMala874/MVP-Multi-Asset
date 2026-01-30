@@ -144,10 +144,24 @@ def _apply_strategy_features(df: pd.DataFrame, spec: _StrategySpec) -> pd.DataFr
     elif spec.name == "S3_BREAKOUT_ATR_REGIME_EMA200":
         atr_period = int(spec.params.get("atr_period", 14))
         ema_period = int(spec.params.get("ema200", 200))
+        compression_window = int(spec.params.get("compression_window", 50))
+        breakout_window = int(spec.params.get("breakout_window", 20))
         if "atr" not in df:
             df["atr"] = atr(df, atr_period)
         if "ema200" not in df:
             df["ema200"] = ema(df["close"], ema_period)
+        if "atr_pct" not in df:
+            df["atr_pct"] = df["atr"] / df["close"] * 100
+        if "compression_z" not in df:
+            df["compression_z"] = atr_pct_zscore(df["atr_pct"], window=compression_window)
+        if "breakout_high" not in df:
+            df["breakout_high"] = (
+                df["high"].shift(1).rolling(window=breakout_window, min_periods=breakout_window).max()
+            )
+        if "breakout_low" not in df:
+            df["breakout_low"] = (
+                df["low"].shift(1).rolling(window=breakout_window, min_periods=breakout_window).min()
+            )
     return df
 
 
@@ -205,24 +219,24 @@ def _run_scenario(
     trade_id = 1
 
     for symbol, df in df_by_symbol.items():
+        cols = {col: df[col].to_numpy() for col in df.columns}
+        if "time" not in cols:
+            if "timestamp" in df.columns:
+                cols["time"] = df["timestamp"].to_numpy()
+            elif isinstance(df.index, pd.DatetimeIndex):
+                cols["time"] = df.index.to_numpy()
         for idx in range(len(df) - 1):
             signal_time = _resolve_time(df, idx)
             signals = []
             for spec in strategies:
-                df_hist = df.iloc[: idx + 1]
-                idx_hist = idx
-                if isinstance(df_hist.index, pd.DatetimeIndex):
-                    now_time = df_hist.index[-1]
-                elif "time" in df_hist.columns:
-                    now_time = df_hist["time"].iloc[-1]
-                else:
-                    now_time = _resolve_time(df_hist, idx_hist)
+                now_time = signal_time
                 ctx = {
-                    "df": df_hist,
-                    "idx": idx_hist,
+                    "cols": cols,
+                    "idx": idx,
                     "symbol": symbol,
                     "current_time": signal_time,
                     "now_time": now_time,
+                    "regime_snapshot": cols["regime_snapshot"][idx],
                 }
                 ctx["config"] = spec.params
                 signal = spec.module.generate_signal(ctx)

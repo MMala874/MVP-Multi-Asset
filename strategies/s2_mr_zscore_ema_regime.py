@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, Set
+from typing import Any, Dict, Optional, Set
 
-import pandas as pd
+import numpy as np
 
 from desk_types import Side, SignalIntent
 STRATEGY_ID = "s2_mr_zscore_ema_regime"
@@ -17,8 +17,17 @@ def _get_param(config: Dict[str, Any], key: str, default: Any) -> Any:
     return config.get(key, default)
 
 
+def _read_value(values: np.ndarray, idx: int) -> Optional[float]:
+    value = values[idx]
+    if value is None:
+        return None
+    if isinstance(value, (float, np.floating)) and np.isnan(value):
+        return None
+    return float(value)
+
+
 def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
-    df: pd.DataFrame = ctx["df"]
+    cols: Dict[str, np.ndarray] = ctx["cols"]
     idx: int = ctx["idx"]
     symbol: str = ctx["symbol"]
     current_time: datetime = ctx["current_time"]
@@ -32,17 +41,12 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     adx_max = _get_param(config, "adx_max", 20.0)
     slope_th = float(_get_param(config, "slope_th", 0.01))
 
-    adx_value = df[adx_col].iloc[idx]
-
-    z_value = df[mr_z_col].iloc[idx]
-    if pd.isna(z_value):
-        z_value = None
-    slope_value = df[ema_slope_col].iloc[idx]
-    if pd.isna(slope_value):
-        slope_value = None
+    adx_value = _read_value(cols[adx_col], idx)
+    z_value = _read_value(cols[mr_z_col], idx)
+    slope_value = _read_value(cols[ema_slope_col], idx)
 
     gate_pass = True
-    if pd.isna(adx_value):
+    if adx_value is None:
         gate_pass = False
     elif adx_max is not None and float(adx_value) >= float(adx_max):
         gate_pass = False
