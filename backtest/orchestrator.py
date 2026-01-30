@@ -12,7 +12,7 @@ from execution.cost_model import CostModel
 from execution.fill_rules import get_fill_price
 from features.indicators import adx, atr, ema, slope
 from features.regime import atr_pct_zscore, compute_atr_pct, spike_flag
-from risk.allocator import RiskAllocator
+from risk.allocator import RiskAllocator, _build_state, _estimate_usd_exposure, _resolve_risk_multiplier, _within_caps
 from risk.conflict import resolve_conflicts
 
 from backtest.metrics import compute_metrics
@@ -214,6 +214,9 @@ def _run_scenario(
 ) -> pd.DataFrame:
     allocator = RiskAllocator(config)
     cost_model = CostModel(config)
+    debug_enabled = bool(getattr(config.outputs, "debug", False))
+    strategy_counts = _init_strategy_debug_counts(strategies) if debug_enabled else {}
+    order_debug = _init_order_debug_counts() if debug_enabled else {}
 
     trades: List[Dict[str, Any]] = []
     trade_id = 1
@@ -240,6 +243,8 @@ def _run_scenario(
                 }
                 ctx["config"] = spec.params
                 signal = spec.module.generate_signal(ctx)
+                if debug_enabled:
+                    _update_strategy_debug_counts(strategy_counts, signal, spec, cols, idx)
                 if signal.side == Side.FLAT:
                     continue
                 signals.append(signal)
@@ -254,6 +259,8 @@ def _run_scenario(
             )
 
             state = {"prices": {symbol: float(df["close"].iat[idx])}}
+            if debug_enabled:
+                _update_order_debug_counts(filtered, state, config, order_debug)
             orders = allocator.allocate(filtered, state)
 
             for order in orders:
@@ -303,6 +310,8 @@ def _run_scenario(
                 trade_id += 1
 
     trades_df = pd.DataFrame(trades, columns=TRADE_LOG_COLUMNS)
+    if debug_enabled:
+        _print_scenario_debug_summary(scenario, strategy_counts, order_debug)
     return trades_df
 
 
@@ -350,6 +359,140 @@ def _resolve_time(df: pd.DataFrame, idx: int) -> datetime:
 
 def _empty_trades() -> pd.DataFrame:
     return pd.DataFrame(columns=TRADE_LOG_COLUMNS)
+
+
+def _new_strategy_debug_counts() -> Dict[str, int]:
+    return {"n_long": 0, "n_short": 0, "n_flat": 0, "n_nan_skip": 0}
+
+
+def _init_strategy_debug_counts(strategies: Iterable[_StrategySpec]) -> Dict[str, Dict[str, int]]:
+    counts: Dict[str, Dict[str, int]] = {}
+    for spec in strategies:
+        strategy_id = getattr(spec.module, "STRATEGY_ID", spec.name)
+        counts[strategy_id] = _new_strategy_debug_counts()
+    return counts
+
+
+def _strategy_has_nan(spec: _StrategySpec, cols: Dict[str, np.ndarray], idx: int) -> bool:
+    required_features = getattr(spec.module, "required_features", None)
+    if not callable(required_features):
+        return False
+    for feature in required_features():
+        values = cols.get(feature)
+        if values is None:
+            return True
+        value = values[idx]
+        if value is None:
+            return True
+        if isinstance(value, (float, np.floating)) and np.isnan(value):
+            return True
+    return False
+
+
+def _update_strategy_debug_counts(
+    strategy_counts: Dict[str, Dict[str, int]],
+    signal: Any,
+    spec: _StrategySpec,
+    cols: Dict[str, np.ndarray],
+    idx: int,
+) -> None:
+    counts = strategy_counts.setdefault(signal.strategy_id, _new_strategy_debug_counts())
+    if signal.side == Side.LONG:
+        counts["n_long"] += 1
+    elif signal.side == Side.SHORT:
+        counts["n_short"] += 1
+    else:
+        counts["n_flat"] += 1
+        if _strategy_has_nan(spec, cols, idx):
+            counts["n_nan_skip"] += 1
+
+
+def _init_order_debug_counts() -> Dict[str, Any]:
+    return {
+        "created": 0,
+        "skipped": {
+            "missing_sl_points": 0,
+            "nonpositive_sl_points": 0,
+            "nonpositive_risk_amount": 0,
+            "qty_nonpositive": 0,
+            "caps": 0,
+        },
+    }
+
+
+def _update_order_debug_counts(
+    signals: List[Any],
+    state: object | None,
+    config: Config,
+    order_debug: Dict[str, Any],
+) -> None:
+    caps = config.risk.caps
+    state_view = _build_state(state)
+    risk_by_strategy: Dict[str, float] = {}
+    risk_by_symbol: Dict[str, float] = {}
+    exposure_total = state_view.exposure_total
+
+    for signal in signals:
+        if signal.sl_points is None:
+            order_debug["skipped"]["missing_sl_points"] += 1
+            continue
+        if signal.sl_points <= 0:
+            order_debug["skipped"]["nonpositive_sl_points"] += 1
+            continue
+
+        risk_multiplier = _resolve_risk_multiplier(signal, state_view)
+        risk_amount = config.risk.r_base * risk_multiplier
+        if risk_amount <= 0:
+            order_debug["skipped"]["nonpositive_risk_amount"] += 1
+            continue
+
+        qty = risk_amount / signal.sl_points
+        if qty <= 0:
+            order_debug["skipped"]["qty_nonpositive"] += 1
+            continue
+
+        if not _within_caps(
+            signal,
+            risk_amount,
+            qty,
+            risk_by_strategy,
+            risk_by_symbol,
+            caps.per_strategy,
+            caps.per_symbol,
+            caps.usd_exposure_cap,
+            state_view,
+            exposure_total,
+        ):
+            order_debug["skipped"]["caps"] += 1
+            continue
+
+        order_debug["created"] += 1
+        risk_by_strategy[signal.strategy_id] = risk_by_strategy.get(signal.strategy_id, 0.0) + risk_amount
+        risk_by_symbol[signal.symbol] = risk_by_symbol.get(signal.symbol, 0.0) + risk_amount
+        exposure_total += _estimate_usd_exposure(qty, signal.symbol, state_view)
+
+
+def _print_scenario_debug_summary(
+    scenario: str,
+    strategy_counts: Dict[str, Dict[str, int]],
+    order_debug: Dict[str, Any],
+) -> None:
+    print(f"[debug] Scenario {scenario} summary")
+    for strategy_id, counts in sorted(strategy_counts.items()):
+        print(
+            "[debug]  "
+            f"{strategy_id}: long={counts['n_long']} short={counts['n_short']} "
+            f"flat={counts['n_flat']} nan_skip={counts['n_nan_skip']}"
+        )
+    skipped = order_debug["skipped"]
+    skipped_total = sum(skipped.values())
+    print(
+        "[debug]  orders: "
+        f"created={order_debug['created']} skipped={skipped_total} "
+        "(missing_sl_points={missing_sl_points}, nonpositive_sl_points={nonpositive_sl_points}, "
+        "nonpositive_risk_amount={nonpositive_risk_amount}, qty_nonpositive={qty_nonpositive}, "
+        "caps={caps})".format(**skipped)
+    )
 
 
 __all__ = ["BacktestOrchestrator"]

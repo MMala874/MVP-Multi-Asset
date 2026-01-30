@@ -212,6 +212,7 @@ class Outputs(StrictBaseModel):
     write_trades_csv: bool
     write_report_json: bool
     write_mc_json: bool
+    debug: bool = False
 
 
 class Reproducibility(StrictBaseModel):
