@@ -23,12 +23,18 @@ strategies:
       ema_fast: 20
       ema_slow: 50
       atr_period: 14
+      k_sl: 2.0
+      min_sl_points: 5.0
     S2_MR_ZSCORE_EMA_REGIME:
       zscore_window: 30
       ema_regime: 200
+      k_sl: 2.0
+      min_sl_points: 5.0
     S3_BREAKOUT_ATR_REGIME_EMA200:
       breakout_lookback: 55
       atr_period: 14
+      k_sl: 2.0
+      min_sl_points: 5.0
 risk:
   r_base: 0.01
   caps:

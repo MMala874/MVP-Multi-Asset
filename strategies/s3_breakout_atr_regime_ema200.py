@@ -53,6 +53,8 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     breakout_low_col = _get_param(config, "breakout_low_col", "breakout_low")
 
     compression_z_low = float(_get_param(config, "compression_z_low", -0.5))
+    k_sl = float(_get_param(config, "k_sl", 2.0))
+    min_sl_points = float(_get_param(config, "min_sl_points", 5.0))
     closes = cols[close_col]
     highs = cols[high_col]
     lows = cols[low_col]
@@ -101,12 +103,19 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
         elif breakout_dir == "down":
             side = Side.SHORT
 
+    if side != Side.FLAT and atr_value is None:
+        side = Side.FLAT
+
+    sl_points = None
+    if side != Side.FLAT:
+        sl_points = max(k_sl * atr_value, min_sl_points)
+
     return SignalIntent(
         strategy_id=STRATEGY_ID,
         symbol=symbol,
         side=side,
         signal_time=current_time,
-        sl_points=None,
+        sl_points=sl_points,
         tp_points=None,
         tags=tags,
     )
