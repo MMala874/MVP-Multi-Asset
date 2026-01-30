@@ -102,13 +102,14 @@ def _make_config() -> Config:
     )
 
 
-def _make_df() -> pd.DataFrame:
+def _make_df(n_bars: int = 6) -> pd.DataFrame:
+    close = pd.Series([1.0 + 0.1 * i for i in range(n_bars)])
     return pd.DataFrame(
         {
-            "open": [1.0, 1.1, 1.2, 1.3, 1.4, 1.5],
-            "high": [1.05, 1.15, 1.25, 1.35, 1.45, 1.55],
-            "low": [0.95, 1.05, 1.15, 1.25, 1.35, 1.45],
-            "close": [1.0, 1.1, 1.2, 1.3, 1.4, 1.5],
+            "open": close + 0.0,
+            "high": close + 0.05,
+            "low": close - 0.05,
+            "close": close,
         }
     )
 
@@ -121,4 +122,15 @@ def test_backtest_runs_small() -> None:
     trades, _ = orchestrator.run({"EURUSD": df}, config)
     assert not trades.empty
     assert trades["regime_snapshot"].notna().all()
+    assert trades["regime_snapshot"].str.contains("VOL=").all()
+
+
+def test_backtest_runs_medium_dataset() -> None:
+    orchestrator = BacktestOrchestrator()
+    config = _make_config()
+    df = _make_df(n_bars=2000)
+
+    trades, _ = orchestrator.run({"EURUSD": df}, config)
+
+    assert not trades.empty
     assert trades["regime_snapshot"].str.contains("VOL=").all()

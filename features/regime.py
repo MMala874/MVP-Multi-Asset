@@ -1,4 +1,3 @@
-import numpy as np
 import pandas as pd
 
 from .indicators import atr
@@ -9,20 +8,11 @@ def compute_atr_pct(df: pd.DataFrame, atr_n: int) -> pd.Series:
     return atr_values / df["close"] * 100
 
 
-def rolling_percentile(series: pd.Series, window: int, q: float) -> pd.Series:
-    def _percentile(values: np.ndarray) -> float:
-        return float(np.percentile(values, q))
-
-    return series.rolling(window=window, min_periods=window).apply(
-        _percentile, raw=True
-    )
-
-
 def atr_pct_zscore(atr_pct: pd.Series, window: int) -> pd.Series:
     mean = atr_pct.rolling(window, min_periods=window).mean()
     std = atr_pct.rolling(window, min_periods=window).std(ddof=0)
     z = (atr_pct - mean) / std
-    return z.where(std != 0, 0.0)
+    return z.mask(std == 0, 0.0)
 
 
 def classify_vol_regime(
