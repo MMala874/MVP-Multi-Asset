@@ -54,6 +54,24 @@ def test_no_percentile_called() -> None:
     assert "rolling_percentile" not in source
 
 
+def test_regime_warmup_is_unknown() -> None:
+    df = pd.DataFrame(
+        {
+            "open": [10.0, 10.2, 10.4, 10.3, 10.6],
+            "high": [10.5, 10.6, 10.8, 10.7, 11.0],
+            "low": [9.8, 10.0, 10.2, 10.1, 10.4],
+            "close": [10.1, 10.3, 10.5, 10.4, 10.7],
+        }
+    )
+    window = 3
+    atr_n = 2
+
+    regime = _compute_regime(df, window=window, atr_n=atr_n)
+
+    assert regime.iat[0].startswith("VOL=UNKNOWN")
+    assert regime.iat[1].startswith("VOL=UNKNOWN")
+
+
 def _make_config() -> Config:
     return Config(
         universe=Universe(symbols=["EURUSD"], timeframe="M1"),

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Set
 
 import numpy as np
 import pandas as pd
+
+from features.regime import atr_pct_zscore
 
 from desk_types import Side, SignalIntent
 
@@ -17,15 +19,6 @@ def required_features() -> Set[str]:
 
 def _get_param(config: Dict[str, Any], key: str, default: Any) -> Any:
     return config.get(key, default)
-
-
-def _rolling_percentile(series: pd.Series, idx: int, window: int, percentile: float) -> Optional[float]:
-    if idx + 1 < window:
-        return None
-    window_series = series.iloc[idx - window + 1 : idx + 1].dropna()
-    if len(window_series) < window:
-        return None
-    return float(np.percentile(window_series.to_numpy(), percentile))
 
 
 def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
@@ -42,7 +35,7 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     ema200_col = _get_param(config, "ema200_col", "ema200")
 
     compression_window = int(_get_param(config, "compression_window", 50))
-    p_low = float(_get_param(config, "p_low", 20.0))
+    compression_z_low = float(_get_param(config, "compression_z_low", -0.5))
     breakout_window = int(_get_param(config, "breakout_window", 20))
 
     closes = df[close_col]
@@ -56,15 +49,14 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
 
     tags: Dict[str, str] = {}
 
-    atr_pct_series = atr_values / closes
-    atr_pct_value = atr_value / close_value if close_value != 0 else np.nan
-    compression_threshold = _rolling_percentile(
-        atr_pct_series, idx, compression_window, p_low
-    )
+    atr_pct_series = atr_values / closes * 100
+    atr_pct_value = atr_value / close_value * 100 if close_value != 0 else np.nan
+    atr_pct_z = atr_pct_zscore(atr_pct_series, window=compression_window)
+    compression_z = atr_pct_z.iloc[idx] if idx < len(atr_pct_z) else np.nan
 
     compression_pass = False
-    if compression_threshold is not None and not pd.isna(atr_pct_value):
-        compression_pass = atr_pct_value < compression_threshold
+    if not pd.isna(compression_z) and not pd.isna(atr_pct_value):
+        compression_pass = compression_z < compression_z_low
 
     tags["compression"] = "compression_pass" if compression_pass else "compression_fail"
 
