@@ -1,4 +1,5 @@
 import sys
+import inspect
 from types import ModuleType
 
 import numpy as np
@@ -8,7 +9,13 @@ from execution.fill_rules import get_fill_price
 from features.indicators import atr, ema, slope, zscore
 from features.regime import compute_atr_pct, rolling_percentile
 from backtest.trade_log import TRADE_LOG_COLUMNS
-from backtest.orchestrator import BacktestOrchestrator, _StrategySpec, _apply_strategy_features, _compute_regime
+from backtest.orchestrator import (
+    BacktestOrchestrator,
+    _StrategySpec,
+    _apply_strategy_features,
+    _compute_regime,
+    _run_scenario,
+)
 from configs.models import (
     BarContract,
     Config,
@@ -291,3 +298,10 @@ def test_orchestrator_strategies_do_not_see_future(monkeypatch) -> None:
     modified = module.captured[0].to_dict()
 
     assert baseline == modified
+
+
+def test_orchestrator_loop_avoids_hist_copy() -> None:
+    source = inspect.getsource(_run_scenario)
+    df_hist_lines = [line for line in source.splitlines() if "df_hist" in line and "df.iloc" in line]
+    assert df_hist_lines, "Expected df_hist slice line in _run_scenario."
+    assert all(".copy()" not in line for line in df_hist_lines)

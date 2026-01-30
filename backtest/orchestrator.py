@@ -176,8 +176,8 @@ def _run_scenario(
             signal_time = _resolve_time(df, idx)
             signals = []
             for spec in strategies:
-                df_hist = df.iloc[: idx + 1].copy()
-                idx_hist = len(df_hist) - 1
+                df_hist = df.iloc[: idx + 1]
+                idx_hist = idx
                 if isinstance(df_hist.index, pd.DatetimeIndex):
                     now_time = df_hist.index[-1]
                 elif "time" in df_hist.columns:
