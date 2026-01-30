@@ -190,7 +190,7 @@ def test_trade_log_tracks_feature_time_bounds() -> None:
                 "spread_used": 0.0,
                 "slippage_used": 0.0,
                 "scenario": "A",
-                "regime_snapshot": "LOW",
+                "regime_snapshot": "VOL=LOW|SPIKE=0",
                 "reason_codes": "",
                 "features_max_time_used": pd.Timestamp("2024-01-01T00:00:00Z"),
             }
