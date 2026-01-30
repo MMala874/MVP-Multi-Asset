@@ -11,6 +11,9 @@ bar_contract:
 regime:
   atr_pct_window: 960
   atr_pct_n: 14
+  z_low: -0.5
+  z_high: 0.5
+  spike_tr_atr_th: 2.5
 strategies:
   enabled:
     - S1_TREND_EMA_ATR_ADX

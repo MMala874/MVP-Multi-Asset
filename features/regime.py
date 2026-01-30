@@ -18,6 +18,13 @@ def rolling_percentile(series: pd.Series, window: int, q: float) -> pd.Series:
     )
 
 
+def atr_pct_zscore(atr_pct: pd.Series, window: int) -> pd.Series:
+    mean = atr_pct.rolling(window, min_periods=window).mean()
+    std = atr_pct.rolling(window, min_periods=window).std(ddof=0)
+    z = (atr_pct - mean) / std
+    return z.where(std != 0, 0.0)
+
+
 def classify_vol_regime(
     atr_pct: pd.Series | float, p35: float, p75: float
 ) -> pd.Series | str:

@@ -10,7 +10,7 @@ import pandas as pd
 from backtest.trade_log import TRADE_LOG_COLUMNS
 from configs.models import Config
 from features.indicators import adx, atr, ema
-from features.regime import compute_atr_pct, rolling_percentile
+from features.regime import atr_pct_zscore, spike_flag
 from risk.allocator import RiskAllocator
 from risk.conflict import resolve_conflicts
 from desk_types import OrderIntent, Side, SystemState
@@ -155,6 +155,9 @@ def _prepare_features(
             df_local,
             window=config.regime.atr_pct_window,
             atr_n=config.regime.atr_pct_n,
+            z_low=config.regime.z_low,
+            z_high=config.regime.z_high,
+            spike_th=config.regime.spike_tr_atr_th,
         )
         prepared[symbol] = df_local
     return prepared
@@ -199,24 +202,41 @@ def _apply_strategy_features(df: pd.DataFrame, spec: _StrategySpec) -> pd.DataFr
     return df
 
 
-def _compute_regime(df: pd.DataFrame, window: int, atr_n: int) -> pd.Series:
-    if "atr" not in df:
-        return pd.Series(["UNKNOWN"] * len(df), index=df.index)
-    atr_pct = compute_atr_pct(df, atr_n=atr_n)
-    p35_series = rolling_percentile(atr_pct, window=window, q=35)
-    p75_series = rolling_percentile(atr_pct, window=window, q=75)
-    regime = pd.Series(["UNKNOWN"] * len(df), index=df.index)
-    valid_mask = atr_pct.notna() & p35_series.notna() & p75_series.notna()
+def _compute_regime(
+    df: pd.DataFrame,
+    window: int,
+    atr_n: int,
+    z_low: float = -0.5,
+    z_high: float = 0.5,
+    spike_th: float = 2.5,
+) -> pd.Series:
+    atr_series = atr(df, atr_n)
+    atr_pct = atr_series / df["close"] * 100
+    z = atr_pct_zscore(atr_pct, window=window)
+
+    regime = pd.Series(["MID"] * len(df), index=df.index)
+    valid_mask = z.notna()
     if valid_mask.any():
-        atr_vals = atr_pct[valid_mask]
-        p35_vals = p35_series[valid_mask]
-        p75_vals = p75_series[valid_mask]
         regime.loc[valid_mask] = np.where(
-            atr_vals < p35_vals,
+            z[valid_mask] < z_low,
             "LOW",
-            np.where(atr_vals < p75_vals, "MID", "HIGH"),
+            np.where(z[valid_mask] > z_high, "HIGH", "MID"),
         )
-    return regime
+
+    prev_close = df["close"].shift(1)
+    tr = pd.concat(
+        [
+            df["high"] - df["low"],
+            (df["high"] - prev_close).abs(),
+            (df["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    tr_atr = tr / atr_series
+    spikes = spike_flag(tr_atr, th=spike_th)
+    spike_tag = spikes.astype(int).astype(str)
+
+    return "VOL=" + regime + "|SPIKE=" + spike_tag
 
 
 def _resolve_time(df: pd.DataFrame, idx: int) -> datetime:

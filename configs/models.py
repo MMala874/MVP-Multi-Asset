@@ -44,6 +44,9 @@ class BarContract(StrictBaseModel):
 class Regime(StrictBaseModel):
     atr_pct_window: int = 960
     atr_pct_n: int = 14
+    z_low: float = -0.5
+    z_high: float = 0.5
+    spike_tr_atr_th: float = 2.5
 
     @validator("atr_pct_window")
     def atr_pct_window_positive(cls, value: int) -> int:
@@ -56,6 +59,12 @@ class Regime(StrictBaseModel):
         if value <= 0:
             raise ValueError("atr_pct_n must be > 0")
         return value
+
+    @model_validator(mode="after")
+    def zscore_bounds_valid(self) -> "Regime":
+        if self.z_low >= self.z_high:
+            raise ValueError("z_low must be < z_high")
+        return self
 
 
 class Strategies(StrictBaseModel):
