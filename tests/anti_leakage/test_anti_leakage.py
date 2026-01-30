@@ -1,6 +1,7 @@
 import sys
 import inspect
 from types import ModuleType
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -35,6 +36,7 @@ from configs.models import (
 )
 from desk_types import Side, SignalIntent
 from validation.filter_tuner import _apply_filters
+from strategies import s2_mr_zscore_ema_regime as s2_strategy
 
 
 def test_feature_functions_ignore_future_data() -> None:
@@ -125,6 +127,45 @@ def test_s2_ema_slope_feature_ignores_future_data() -> None:
     ema_slope_modified = prepared_modified["ema_slope"].iat[t]
 
     assert np.isclose(ema_slope_original, ema_slope_modified, equal_nan=True)
+
+
+def test_s2_mr_z_feature_and_signal_ignore_future_data() -> None:
+    df = pd.DataFrame(
+        {
+            "open": [10.0, 10.2, 10.4, 10.3, 10.6, 10.8, 11.0, 11.2],
+            "high": [10.5, 10.6, 10.8, 10.7, 11.0, 11.2, 11.4, 11.6],
+            "low": [9.8, 10.0, 10.2, 10.1, 10.4, 10.6, 10.8, 11.0],
+            "close": [10.1, 10.3, 10.5, 10.4, 10.7, 10.9, 11.1, 11.3],
+        }
+    )
+    t = 5
+    spec = _StrategySpec(
+        name="S2_MR_ZSCORE_EMA_REGIME",
+        module=None,
+        params={"ema_regime": 3, "adx_period": 3, "slope_window": 3, "z_window": 3},
+    )
+    prepared = _apply_strategy_features(df.copy(), spec)
+    mr_z_original = prepared["mr_z"].iat[t]
+    ctx = {
+        "df": prepared,
+        "idx": t,
+        "symbol": "EURUSD",
+        "current_time": datetime(2024, 1, 1),
+        "config": {"z_entry": 1.0, "adx_max": 50.0, "slope_th": 1.0},
+    }
+    signal_original = s2_strategy.generate_signal(ctx)
+
+    df_modified = df.copy()
+    df_modified.loc[t + 1 :, "close"] = df_modified.loc[t + 1 :, "close"] + 50.0
+    df_modified.loc[t + 1 :, "high"] = df_modified.loc[t + 1 :, "high"] + 50.0
+    df_modified.loc[t + 1 :, "low"] = df_modified.loc[t + 1 :, "low"] - 50.0
+    prepared_modified = _apply_strategy_features(df_modified, spec)
+    mr_z_modified = prepared_modified["mr_z"].iat[t]
+    ctx["df"] = prepared_modified
+    signal_modified = s2_strategy.generate_signal(ctx)
+
+    assert np.isclose(mr_z_original, mr_z_modified, equal_nan=True)
+    assert signal_original == signal_modified
 
 
 def test_bar_contract_fill_is_open_next() -> None:

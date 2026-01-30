@@ -126,12 +126,21 @@ def _apply_strategy_features(df: pd.DataFrame, spec: _StrategySpec) -> pd.DataFr
         ema_base = int(spec.params.get("ema_regime", spec.params.get("ema_base", 200)))
         adx_period = int(spec.params.get("adx_period", 14))
         slope_window = int(spec.params.get("slope_window", 20))
+        z_window = int(spec.params.get("z_window", 30))
         if "ema_base" not in df:
             df["ema_base"] = ema(df["close"], ema_base)
         if "ema_slope" not in df:
             df["ema_slope"] = slope(df["ema_base"], slope_window)
         if "adx" not in df:
             df["adx"] = adx(df, adx_period)
+        if "mr_delta" not in df:
+            df["mr_delta"] = df["close"] - df["ema_base"]
+        if "mr_z" not in df:
+            rolling = df["mr_delta"].rolling(window=z_window, min_periods=z_window)
+            mean = rolling.mean()
+            std = rolling.std(ddof=0)
+            df["mr_z"] = (df["mr_delta"] - mean) / std
+            df.loc[std == 0, "mr_z"] = np.nan
     elif spec.name == "S3_BREAKOUT_ATR_REGIME_EMA200":
         atr_period = int(spec.params.get("atr_period", 14))
         ema_period = int(spec.params.get("ema200", 200))
