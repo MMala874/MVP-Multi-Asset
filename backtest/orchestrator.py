@@ -150,7 +150,6 @@ def _compute_regime(
     z_high: float = 0.5,
     spike_th: float = 2.5,
 ) -> pd.Series:
-    atr_series = atr(df, atr_n)
     atr_pct = compute_atr_pct(df, atr_n=atr_n)
     z = atr_pct_zscore(atr_pct, window=window)
 
@@ -163,16 +162,21 @@ def _compute_regime(
             np.where(z[valid_mask] > z_high, "HIGH", "MID"),
         )
 
-    prev_close = df["close"].shift(1)
-    tr = pd.concat(
-        [
-            df["high"] - df["low"],
-            (df["high"] - prev_close).abs(),
-            (df["low"] - prev_close).abs(),
-        ],
-        axis=1,
-    ).max(axis=1)
-    tr_atr = tr / atr_series
+    if "tr_atr" in df.columns:
+        tr_atr = df["tr_atr"]
+    else:
+        atr_series = atr(df, atr_n)
+        prev_close = df["close"].shift(1)
+        tr = pd.concat(
+            [
+                df["high"] - df["low"],
+                (df["high"] - prev_close).abs(),
+                (df["low"] - prev_close).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        tr_atr = tr / atr_series
+
     spikes = spike_flag(tr_atr, th=spike_th)
     spike_tag = spikes.astype(int).astype(str)
 
