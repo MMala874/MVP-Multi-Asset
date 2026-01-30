@@ -1,3 +1,5 @@
+import warnings
+
 import pandas as pd
 
 from .indicators import atr
@@ -34,3 +36,17 @@ def spike_flag(tr_atr: pd.Series | float, th: float = 2.5) -> pd.Series | bool:
     if isinstance(tr_atr, pd.Series):
         return tr_atr > th
     return float(tr_atr) > th
+
+
+def rolling_percentile(series: pd.Series, window: int) -> pd.Series:
+    """DEPRECATED: not used in backtest path."""
+    warnings.warn(
+        "rolling_percentile is deprecated and not used in backtest path.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+    def _percentile(values: pd.Series) -> float:
+        return values.rank(pct=True).iloc[-1]
+
+    return series.rolling(window, min_periods=window).apply(_percentile, raw=False)
