@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, Optional, Set
 
-import pandas as pd
+import numpy as np
 
 from desk_types import Side, SignalIntent
 
@@ -18,15 +18,17 @@ def _get_param(config: Dict[str, Any], key: str, default: Any) -> Any:
     return config.get(key, default)
 
 
-def _read_value(series: pd.Series, idx: int) -> Optional[float]:
-    value = series.iloc[idx]
-    if pd.isna(value):
+def _read_value(values: np.ndarray, idx: int) -> Optional[float]:
+    value = values[idx]
+    if value is None:
+        return None
+    if isinstance(value, (float, np.floating)) and np.isnan(value):
         return None
     return float(value)
 
 
 def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
-    df: pd.DataFrame = ctx["df"]
+    cols: Dict[str, np.ndarray] = ctx["cols"]
     idx: int = ctx["idx"]
     symbol: str = ctx["symbol"]
     current_time: datetime = ctx["current_time"]
@@ -37,10 +39,10 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     adx_col = _get_param(config, "adx_col", "adx")
     atr_col = _get_param(config, "atr_col", "atr")
 
-    ema_fast = _read_value(df[ema_fast_col], idx)
-    ema_slow = _read_value(df[ema_slow_col], idx)
-    adx_value = _read_value(df[adx_col], idx)
-    atr_value = _read_value(df[atr_col], idx)
+    ema_fast = _read_value(cols[ema_fast_col], idx)
+    ema_slow = _read_value(cols[ema_slow_col], idx)
+    adx_value = _read_value(cols[adx_col], idx)
+    atr_value = _read_value(cols[atr_col], idx)
 
     tags: Dict[str, str] = {}
     side = Side.FLAT

@@ -147,7 +147,7 @@ def test_s2_mr_z_feature_and_signal_ignore_future_data() -> None:
     prepared = _apply_strategy_features(df.copy(), spec)
     mr_z_original = prepared["mr_z"].iat[t]
     ctx = {
-        "df": prepared,
+        "cols": {col: prepared[col].to_numpy() for col in prepared.columns},
         "idx": t,
         "symbol": "EURUSD",
         "current_time": datetime(2024, 1, 1),
@@ -161,7 +161,7 @@ def test_s2_mr_z_feature_and_signal_ignore_future_data() -> None:
     df_modified.loc[t + 1 :, "low"] = df_modified.loc[t + 1 :, "low"] - 50.0
     prepared_modified = _apply_strategy_features(df_modified, spec)
     mr_z_modified = prepared_modified["mr_z"].iat[t]
-    ctx["df"] = prepared_modified
+    ctx["cols"] = {col: prepared_modified[col].to_numpy() for col in prepared_modified.columns}
     signal_modified = s2_strategy.generate_signal(ctx)
 
     assert np.isclose(mr_z_original, mr_z_modified, equal_nan=True)
@@ -295,8 +295,8 @@ def test_orchestrator_strategies_do_not_see_future(monkeypatch) -> None:
     module.captured = []
 
     def generate_signal(ctx):
-        df = ctx["df"]
-        last_close = float(df["close"].iloc[-1])
+        cols = ctx["cols"]
+        last_close = float(cols["close"][ctx["idx"]])
         side = Side.LONG if last_close > 100 else Side.SHORT
         signal = SignalIntent(
             strategy_id="dummy",
@@ -343,6 +343,5 @@ def test_orchestrator_strategies_do_not_see_future(monkeypatch) -> None:
 
 def test_orchestrator_loop_avoids_hist_copy() -> None:
     source = inspect.getsource(_run_scenario)
-    df_hist_lines = [line for line in source.splitlines() if "df_hist" in line and "df.iloc" in line]
-    assert df_hist_lines, "Expected df_hist slice line in _run_scenario."
-    assert all(".copy()" not in line for line in df_hist_lines)
+    assert "df.iloc[: idx + 1]" not in source
+    assert "df_hist" not in source
