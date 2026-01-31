@@ -222,6 +222,22 @@ def _run_scenario(
     trade_id = 1
 
     for symbol, df in df_by_symbol.items():
+        position = {
+            "current_side": Side.FLAT,
+            "entry_price": None,
+            "entry_time": None,
+            "entry_idx": None,
+            "entry_price_adj": None,
+            "qty": None,
+            "strategy_id": None,
+            "signal_time": None,
+            "signal_idx": None,
+            "sl_price": None,
+            "tp_price": None,
+            "spread_used": None,
+            "slippage_used": None,
+            "reason_codes": None,
+        }
         cols = {col: df[col].to_numpy() for col in df.columns}
         if "time" not in cols:
             if "timestamp" in df.columns:
@@ -229,6 +245,97 @@ def _run_scenario(
             elif isinstance(df.index, pd.DatetimeIndex):
                 cols["time"] = df.index.to_numpy()
         for idx in range(len(df) - 1):
+            if position["current_side"] != Side.FLAT:
+                exit_price_raw = None
+                exit_time = _resolve_time(df, idx + 1)
+                high = float(df["high"].iat[idx + 1])
+                low = float(df["low"].iat[idx + 1])
+                if position["current_side"] == Side.LONG:
+                    sl_price = position["sl_price"]
+                    tp_price = position["tp_price"]
+                    sl_hit = sl_price is not None and low <= sl_price
+                    tp_hit = tp_price is not None and high >= tp_price
+                    if sl_hit:
+                        exit_price_raw = sl_price
+                    elif tp_hit:
+                        exit_price_raw = tp_price
+                elif position["current_side"] == Side.SHORT:
+                    sl_price = position["sl_price"]
+                    tp_price = position["tp_price"]
+                    sl_hit = sl_price is not None and high >= sl_price
+                    tp_hit = tp_price is not None and low <= tp_price
+                    if sl_hit:
+                        exit_price_raw = sl_price
+                    elif tp_hit:
+                        exit_price_raw = tp_price
+                if exit_price_raw is None and (idx + 1) == (len(df) - 1):
+                    exit_price_raw = float(df["close"].iat[idx + 1])
+
+                if exit_price_raw is not None:
+                    exit_cost = cost_model.trade_cost_pips(
+                        symbol=symbol,
+                        idx_t=idx,
+                        scenario=scenario,
+                        df=df,
+                        atr_series=df["atr"],
+                    )[1]
+                    exit_price_adj = _apply_cost(
+                        float(exit_price_raw),
+                        exit_cost,
+                        _opposite_side(position["current_side"]),
+                    )
+                    pnl = _calc_pnl(
+                        position["current_side"],
+                        float(position["qty"]),
+                        float(position["entry_price_adj"]),
+                        exit_price_adj,
+                    )
+                    pnl_pct = (
+                        pnl / (abs(position["entry_price_adj"]) * abs(position["qty"]))
+                        if position["qty"] != 0
+                        else 0.0
+                    )
+                    trades.append(
+                        {
+                            "trade_id": trade_id,
+                            "order_id": f"{scenario}-{symbol}-{position['entry_idx']}-{trade_id}",
+                            "symbol": symbol,
+                            "strategy_id": position["strategy_id"],
+                            "side": position["current_side"].value,
+                            "qty": position["qty"],
+                            "signal_time": position["signal_time"],
+                            "signal_idx": position["signal_idx"],
+                            "fill_time": position["entry_time"],
+                            "entry_price": position["entry_price_adj"],
+                            "exit_time": exit_time,
+                            "exit_price": exit_price_adj,
+                            "pnl": pnl,
+                            "pnl_pct": pnl_pct,
+                            "spread_used": position["spread_used"],
+                            "slippage_used": position["slippage_used"],
+                            "scenario": scenario,
+                            "regime_snapshot": df["regime_snapshot"].iat[idx],
+                            "reason_codes": position["reason_codes"],
+                        }
+                    )
+                    trade_id += 1
+                    position = {
+                        "current_side": Side.FLAT,
+                        "entry_price": None,
+                        "entry_time": None,
+                        "entry_idx": None,
+                        "entry_price_adj": None,
+                        "qty": None,
+                        "strategy_id": None,
+                        "signal_time": None,
+                        "signal_idx": None,
+                        "sl_price": None,
+                        "tp_price": None,
+                        "spread_used": None,
+                        "slippage_used": None,
+                        "reason_codes": None,
+                    }
+                continue
             signal_time = _resolve_time(df, idx)
             signals = []
             for spec in strategies:
@@ -275,39 +382,36 @@ def _run_scenario(
                     atr_series=df["atr"],
                 )
                 entry_price_adj = _apply_cost(entry_price, entry_cost, order.side)
-                exit_time = _resolve_time(df, idx + 1)
-                exit_price_raw = float(df["close"].iat[idx + 1])
-                exit_price_adj = _apply_cost(exit_price_raw, exit_cost, _opposite_side(order.side))
-
-                pnl = _calc_pnl(order.side, order.qty, entry_price_adj, exit_price_adj)
-                pnl_pct = pnl / (abs(entry_price_adj) * abs(order.qty)) if order.qty != 0 else 0.0
-
                 reason_codes = _encode_reason_codes(order.meta, filtered)
-
-                trades.append(
-                    {
-                        "trade_id": trade_id,
-                        "order_id": f"{scenario}-{symbol}-{idx}-{trade_id}",
-                        "symbol": symbol,
-                        "strategy_id": order.strategy_id,
-                        "side": order.side.value,
-                        "qty": order.qty,
-                        "signal_time": signal_time,
-                        "signal_idx": idx,
-                        "fill_time": _resolve_time(df, idx + 1),
-                        "entry_price": entry_price_adj,
-                        "exit_time": exit_time,
-                        "exit_price": exit_price_adj,
-                        "pnl": pnl,
-                        "pnl_pct": pnl_pct,
-                        "spread_used": spread_used,
-                        "slippage_used": slippage_used,
-                        "scenario": scenario,
-                        "regime_snapshot": df["regime_snapshot"].iat[idx],
-                        "reason_codes": reason_codes,
-                    }
-                )
-                trade_id += 1
+                sl_price = None
+                tp_price = None
+                if order.sl_points is not None:
+                    if order.side == Side.LONG:
+                        sl_price = entry_price - order.sl_points
+                    elif order.side == Side.SHORT:
+                        sl_price = entry_price + order.sl_points
+                if order.tp_points is not None:
+                    if order.side == Side.LONG:
+                        tp_price = entry_price + order.tp_points
+                    elif order.side == Side.SHORT:
+                        tp_price = entry_price - order.tp_points
+                position = {
+                    "current_side": order.side,
+                    "entry_price": entry_price,
+                    "entry_time": _resolve_time(df, idx + 1),
+                    "entry_idx": idx,
+                    "entry_price_adj": entry_price_adj,
+                    "qty": order.qty,
+                    "strategy_id": order.strategy_id,
+                    "signal_time": signal_time,
+                    "signal_idx": idx,
+                    "sl_price": sl_price,
+                    "tp_price": tp_price,
+                    "spread_used": spread_used,
+                    "slippage_used": slippage_used,
+                    "reason_codes": reason_codes,
+                }
+                break
 
     trades_df = pd.DataFrame(trades, columns=TRADE_LOG_COLUMNS)
     if debug_enabled:
