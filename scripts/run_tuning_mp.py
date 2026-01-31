@@ -5,8 +5,7 @@ Two-stage approach:
   Stage 1 (Fast): Evaluate all parameter combinations for tune_scenario only (default: B)
   Stage 2 (Comprehensive): Evaluate top-K candidates with full A/B/C scenarios
 
-This significantly reduces overall evaluation time by avoiding expensive A/B/C evaluations
-for candidates that won't make the top-K cutoff.
+Uses worker process initializer to load data ONCE per worker (efficient on Windows).
 
 Usage:
   python -m scripts.run_tuning_mp \\
@@ -22,8 +21,10 @@ Optionally disable two-stage and run all A/B/C for all combinations:
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
+import sys
 import time
 from multiprocessing import Pool, cpu_count
 from pathlib import Path
@@ -31,12 +32,21 @@ from typing import Any, Dict, List
 
 import pandas as pd
 
+from configs.loader import load_config
 from tuning.grid import build_grid
 from tuning.worker import (
     run_worker,
     run_worker_single_scenario,
     run_worker_full_scenarios,
 )
+
+# Global state for worker processes (set by initializer)
+_WORKER_STATE = {
+    "df_by_symbol": None,
+    "config": None,
+    "strategy_id": None,
+    "tune_scenario": None,
+}
 
 
 def _parse_args() -> argparse.Namespace:
@@ -97,6 +107,7 @@ def _parse_args() -> argparse.Namespace:
         default=True,
         help="Use two-stage tuning: fast B-only, then full A/B/C for top_k.",
     )
+    ]
     parser.add_argument(
         "--tune_scenario",
         type=str,
@@ -126,7 +137,6 @@ def _parse_args() -> argparse.Namespace:
     return args
 
 
-
 def _get_worker_count() -> int:
     """Get safe worker count: cpu_count-1, capped at 7."""
     count = max(1, cpu_count() - 1)
@@ -149,7 +159,7 @@ def _print_progress(
     show_eta: bool,
     stage: str = "Stage 1",
 ) -> None:
-    """Print progress line with ETA and best result info."""
+    """Print progress line with ETA and best result info (flush immediately)."""
     pct = (completed / total) * 100.0 if total > 0 else 0.0
 
     if show_eta and completed > 0:
@@ -161,12 +171,12 @@ def _print_progress(
 
     elapsed_str = _format_time(elapsed)
     best_score = best_result.get("score_B", 0.0)
-    best_params = best_result.get("params", {})
 
     print(
         f"[{stage}] {completed}/{total} ({pct:.1f}%) "
         f"elapsed={elapsed_str} eta={eta_str} "
-        f"best_score={best_score:.4f}"
+        f"best_score={best_score:.4f}",
+        flush=True,
     )
 
 
@@ -180,6 +190,44 @@ def _flatten_result(result: Dict[str, Any]) -> Dict[str, Any]:
         if key != "params":
             row[key] = result[key]
     return row
+
+
+def _worker_init(
+    df_by_symbol: Dict[str, pd.DataFrame],
+    config_path: str,
+    strategy_id: str,
+    tune_scenario: str,
+) -> None:
+    """Initialize worker process state (called once per worker)."""
+    global _WORKER_STATE
+    _WORKER_STATE["df_by_symbol"] = df_by_symbol
+    _WORKER_STATE["config_path"] = config_path
+    _WORKER_STATE["strategy_id"] = strategy_id
+    _WORKER_STATE["tune_scenario"] = tune_scenario
+
+
+def _worker_stage1_single_param(param_set: Dict[str, Any]) -> Dict[str, Any]:
+    """Wrapper for Stage 1: evaluate single param set with B-only scenario."""
+    global _WORKER_STATE
+    return run_worker_single_scenario(
+        _WORKER_STATE["config_path"],
+        _WORKER_STATE["strategy_id"],
+        param_set,
+        _WORKER_STATE["df_by_symbol"],
+        _WORKER_STATE["tune_scenario"],
+    )
+
+
+def _worker_stage2_full_scenarios(param_set: Dict[str, Any]) -> Dict[str, Any]:
+    """Wrapper for Stage 2: evaluate single param set with A/B/C scenarios."""
+    global _WORKER_STATE
+    return run_worker_full_scenarios(
+        _WORKER_STATE["config_path"],
+        _WORKER_STATE["strategy_id"],
+        param_set,
+        _WORKER_STATE["df_by_symbol"],
+    )
+
 
 
 def main() -> None:
@@ -228,6 +276,12 @@ def main() -> None:
         results_final = _run_stage2_topk_evaluation(
             args, results_stage1, df_by_symbol, num_workers
         )
+        
+        # Save Stage 1 results
+        stage1_path = out_dir / "stage1_results.csv"
+        df_stage1 = pd.DataFrame([_flatten_result(r) for r in results_stage1])
+        df_stage1 = df_stage1.sort_values(by="score_B", ascending=False)
+        df_stage1.to_csv(stage1_path, index=False)
     else:
         print(f"\n=== Single Stage: Full A/B/C for all combinations ===")
         results_final = _run_single_stage(
@@ -243,31 +297,31 @@ def _run_stage1_fast_search(
     df_by_symbol: Dict[str, pd.DataFrame],
     num_workers: int,
 ) -> List[Dict[str, Any]]:
-    """Stage 1: Fast grid search evaluating only tune_scenario."""
-    worker_inputs = [
-        (args.config, args.strategy_id, params, df_by_symbol, args.tune_scenario)
-        for params in grid
-    ]
-
+    """Stage 1: Fast grid search evaluating only tune_scenario (B by default)."""
     results: List[Dict[str, Any]] = []
     best_result: Dict[str, Any] = {}
     start_time = time.time()
 
-    with Pool(processes=num_workers) as pool:
+    with Pool(
+        processes=num_workers,
+        initializer=_worker_init,
+        initargs=(df_by_symbol, args.config, args.strategy_id, args.tune_scenario),
+    ) as pool:
         for i, result in enumerate(
-            pool.starmap(run_worker_single_scenario, worker_inputs), 1
+            pool.imap_unordered(_worker_stage1_single_param, grid), 1
         ):
             results.append(result)
 
-            # Always use score_B for consistency across all phases
+            # Always use score_B for consistency
             if result.get("score_B", float("-inf")) > best_result.get("score_B", float("-inf")):
                 best_result = result
 
+            # Print progress
             if i % args.progress_every == 0 or i == len(grid):
                 elapsed = time.time() - start_time
                 _print_progress(i, len(grid), elapsed, best_result, args.show_eta, "Stage 1")
 
-    print(f"Stage 1 complete: {len(results)} evaluated\n")
+    print(f"Stage 1 complete: {len(results)} evaluated\n", flush=True)
     return results
 
 
@@ -282,20 +336,20 @@ def _run_stage2_topk_evaluation(
     df_sorted = df_temp.sort_values(by="score_B", ascending=False)
     top_k_results_stage1 = df_sorted.head(args.top_k).to_dict("records")
 
-    print(f"Evaluating top {len(top_k_results_stage1)} candidates with full A/B/C scenarios...")
+    print(f"Evaluating top {len(top_k_results_stage1)} candidates with full A/B/C scenarios...", flush=True)
 
     top_k_params = [r["params"] for r in top_k_results_stage1]
-    worker_inputs = [
-        (args.config, args.strategy_id, params, df_by_symbol) for params in top_k_params
-    ]
-
     results_topk: List[Dict[str, Any]] = []
     best_result: Dict[str, Any] = {}
     start_time = time.time()
 
-    with Pool(processes=num_workers) as pool:
+    with Pool(
+        processes=num_workers,
+        initializer=_worker_init,
+        initargs=(df_by_symbol, args.config, args.strategy_id, args.tune_scenario),
+    ) as pool:
         for i, result in enumerate(
-            pool.starmap(run_worker_full_scenarios, worker_inputs), 1
+            pool.imap_unordered(_worker_stage2_full_scenarios, top_k_params), 1
         ):
             results_topk.append(result)
 
@@ -305,7 +359,7 @@ def _run_stage2_topk_evaluation(
             elapsed = time.time() - start_time
             _print_progress(i, len(top_k_params), elapsed, best_result, args.show_eta, "Stage 2")
 
-    print(f"Stage 2 complete: Full A/B/C evaluation done on {len(results_topk)} candidates\n")
+    print(f"Stage 2 complete: Full A/B/C evaluation done on {len(results_topk)} candidates\n", flush=True)
     return results_topk
 
 
@@ -316,16 +370,19 @@ def _run_single_stage(
     num_workers: int,
 ) -> List[Dict[str, Any]]:
     """Single stage: Evaluate all candidates with A/B/C."""
-    worker_inputs = [
-        (args.config, args.strategy_id, params, df_by_symbol) for params in grid
-    ]
-
     results: List[Dict[str, Any]] = []
     best_result: Dict[str, Any] = {}
     start_time = time.time()
 
-    with Pool(processes=num_workers) as pool:
-        for i, result in enumerate(pool.imap_unordered(run_worker, worker_inputs), 1):
+    with Pool(
+        processes=num_workers,
+        initializer=_worker_init,
+        initargs=(df_by_symbol, args.config, args.strategy_id, "B"),  # tune_scenario not used in full eval
+    ) as pool:
+        # Use run_worker directly which evaluates all A/B/C
+        for i, result in enumerate(pool.imap_unordered(run_worker, [
+            (args.config, args.strategy_id, params, df_by_symbol) for params in grid
+        ]), 1):
             results.append(result)
 
             if result.get("score_B", float("-inf")) > best_result.get("score_B", float("-inf")):
@@ -335,7 +392,7 @@ def _run_single_stage(
                 elapsed = time.time() - start_time
                 _print_progress(i, len(grid), elapsed, best_result, args.show_eta, "Single Stage")
 
-    print(f"Evaluated {len(results)} candidates\n")
+    print(f"Evaluated {len(results)} candidates\n", flush=True)
     return results
 
 
@@ -370,7 +427,7 @@ def _save_results(
         "results": results,
     }
     with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(output_json, f, indent=2)
+        json.dump(output_json, f, indent=2, default=str)
 
     top_k_results = results[: args.top_k]
     df_top_k = pd.DataFrame([_flatten_result(r) for r in top_k_results])
@@ -382,7 +439,7 @@ def _save_results(
         "results": top_k_results,
     }
     with open(top_k_json, "w", encoding="utf-8") as f:
-        json.dump(top_k_json_output, f, indent=2)
+        json.dump(top_k_json_output, f, indent=2, default=str)
 
     # Save metadata separately for easy access
     with open(metadata_path, "w", encoding="utf-8") as f:
@@ -393,9 +450,7 @@ def _save_results(
     print(f"  Score: {best.get('score_B', 0.0):.4f}")
     print(f"  Params: {best.get('params', {})}")
 
-    print(f"\nOutputs saved to: {out_dir.resolve()}")
-
-
+    print(f"\nOutputs saved to: {out_dir.resolve()}", flush=True)
 
 
 if __name__ == "__main__":
