@@ -444,570 +444,6 @@ class DDGuard:
 __all__ = ["DDGuard", "DDStatus"]
 
 ================
-File: runs_tuning_small/top_k.json
-================
-{
-  "metadata": {
-    "limit_bars": null,
-    "grid_size": "small",
-    "workers": 7,
-    "two_stage": true,
-    "tune_scenario": "B",
-    "total_combinations": 16
-  },
-  "results": [
-    {
-      "params": {
-        "ema_fast": 20,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 25,
-        "atr_period": 14,
-        "k_sl": 3.0,
-        "k_tp": 1.5,
-        "min_sl_points": 5.0,
-        "min_tp_points": 5.0
-      },
-      "trades_A": 18408,
-      "expectancy_A": -2.9642533676734577,
-      "pf_A": 0.7450801458285529,
-      "max_drawdown_A": -54740.30681502326,
-      "trades_B": 18285,
-      "expectancy_B": -3.7159735518730703,
-      "pf_B": 0.6914068742173202,
-      "max_drawdown_B": -68117.95272843348,
-      "trades_C": 18065,
-      "expectancy_C": -6.609608549247833,
-      "pf_C": 0.5116114646486816,
-      "max_drawdown_C": -119554.63784428197,
-      "score_B": 0.6914068742173202
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 50,
-        "adx_period": 14,
-        "adx_th": 25,
-        "atr_period": 14,
-        "k_sl": 3.0,
-        "k_tp": 1.5,
-        "min_sl_points": 5.0,
-        "min_tp_points": 5.0
-      },
-      "trades_A": 18446,
-      "expectancy_A": -2.978307184593852,
-      "pf_A": 0.7441718833488247,
-      "max_drawdown_A": -55112.960569367766,
-      "trades_B": 18301,
-      "expectancy_B": -3.7565758637074644,
-      "pf_B": 0.6888291983687186,
-      "max_drawdown_B": -68920.03163360382,
-      "trades_C": 18067,
-      "expectancy_C": -6.625851433878426,
-      "pf_C": 0.5107176472347835,
-      "max_drawdown_C": -119851.23673524514,
-      "score_B": 0.6888291983687186
-    },
-    {
-      "params": {
-        "ema_fast": 20,
-        "ema_slow": 50,
-        "adx_period": 14,
-        "adx_th": 25,
-        "atr_period": 14,
-        "k_sl": 3.0,
-        "k_tp": 1.5,
-        "min_sl_points": 5.0,
-        "min_tp_points": 5.0
-      },
-      "trades_A": 18456,
-      "expectancy_A": -2.8795437597896836,
-      "pf_A": 0.7516019830086156,
-      "max_drawdown_A": -53319.96587302789,
-      "trades_B": 18326,
-      "expectancy_B": -3.661680787960294,
-      "pf_B": 0.6953242925617606,
-      "max_drawdown_B": -67274.89887205366,
-      "trades_C": 18070,
-      "expectancy_C": -6.525397287832631,
-      "pf_C": 0.515829365508151,
-      "max_drawdown_C": -118055.90787049924,
-      "score_B": 0.6953242925617606
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 25,
-        "atr_period": 14,
-        "k_sl": 3.0,
-        "k_tp": 1.5,
-        "min_sl_points": 5.0,
-        "min_tp_points": 5.0
-      },
-      "trades_A": 18475,
-      "expectancy_A": -3.0040520812771763,
-      "pf_A": 0.7422139929142965,
-      "max_drawdown_A": -55674.19302448614,
-      "trades_B": 18318,
-      "expectancy_B": -3.75229601006108,
-      "pf_B": 0.6891049125836389,
-      "max_drawdown_B": -68905.93464473296,
-      "trades_C": 18072,
-      "expectancy_C": -6.620517338505225,
-      "pf_C": 0.5118893332531064,
-      "max_drawdown_C": -119798.04874358635,
-      "score_B": 0.6891049125836389
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 50,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "k_sl": 3.0,
-        "k_tp": 1.5,
-        "min_sl_points": 5.0,
-        "min_tp_points": 5.0
-      },
-      "trades_A": 24165,
-      "expectancy_A": -2.985144987146362,
-      "pf_A": 0.7417354706446653,
-      "max_drawdown_A": -72620.07754132064,
-      "trades_B": 23965,
-      "expectancy_B": -3.751509898031502,
-      "pf_B": 0.6868843874827255,
-      "max_drawdown_B": -90310.04369018947,
-      "trades_C": 23724,
-      "expectancy_C": -6.6608479732809425,
-      "pf_C": 0.5071887250953244,
-      "max_drawdown_C": -158365.80638685325,
-      "score_B": 0.6868843874827255
-    },
-    {
-      "params": {
-        "ema_fast": 20,
-        "ema_slow": 50,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "k_sl": 3.0,
-        "k_tp": 1.5,
-        "min_sl_points": 5.0,
-        "min_tp_points": 5.0
-      },
-      "trades_A": 24164,
-      "expectancy_A": -2.9333759981222536,
-      "pf_A": 0.7457449899928021,
-      "max_drawdown_A": -71252.97398989697,
-      "trades_B": 23979,
-      "expectancy_B": -3.7100866811039395,
-      "pf_B": 0.6899009805580044,
-      "max_drawdown_B": -89329.66040700547,
-      "trades_C": 23714,
-      "expectancy_C": -6.653648657542836,
-      "pf_C": 0.5076652577500486,
-      "max_drawdown_C": -158128.473333707,
-      "score_B": 0.6899009805580044
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "k_sl": 3.0,
-        "k_tp": 1.5,
-        "min_sl_points": 5.0,
-        "min_tp_points": 5.0
-      },
-      "trades_A": 24195,
-      "expectancy_A": -3.0305662515279495,
-      "pf_A": 0.7383635891321917,
-      "max_drawdown_A": -73610.67855217458,
-      "trades_B": 23996,
-      "expectancy_B": -3.7776131708970513,
-      "pf_B": 0.6849960854501266,
-      "max_drawdown_B": -90912.19731191416,
-      "trades_C": 23723,
-      "expectancy_C": -6.719585981025662,
-      "pf_C": 0.5041831186774269,
-      "max_drawdown_C": -159661.32802107715,
-      "score_B": 0.6849960854501266
-    },
-    {
-      "params": {
-        "ema_fast": 20,
-        "ema_slow": 50,
-        "adx_period": 14,
-        "adx_th": 25,
-        "atr_period": 14,
-        "k_sl": 2.0,
-        "k_tp": 1.5,
-        "min_sl_points": 5.0,
-        "min_tp_points": 5.0
-      },
-      "trades_A": 24732,
-      "expectancy_A": -2.703437220181579,
-      "pf_A": 0.7279016730890152,
-      "max_drawdown_A": -66807.69701088568,
-      "trades_B": 24745,
-      "expectancy_B": -3.488716964304549,
-      "pf_B": 0.6632718387083919,
-      "max_drawdown_B": -86274.18396307123,
-      "trades_C": 24671,
-      "expectancy_C": -6.002424144076171,
-      "pf_C": 0.48756425231907846,
-      "max_drawdown_C": -148029.42548493232,
-      "score_B": 0.6632718387083919
-    },
-    {
-      "params": {
-        "ema_fast": 20,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "k_sl": 3.0,
-        "k_tp": 1.5,
-        "min_sl_points": 5.0,
-        "min_tp_points": 5.0
-      },
-      "trades_A": 24172,
-      "expectancy_A": -3.0115307687248083,
-      "pf_A": 0.7395229558841598,
-      "max_drawdown_A": -73045.75117303708,
-      "trades_B": 24002,
-      "expectancy_B": -3.7790144219392436,
-      "pf_B": 0.6846432785962323,
-      "max_drawdown_B": -90879.89148292072,
-      "trades_C": 23739,
-      "expectancy_C": -6.663841407786431,
-      "pf_C": 0.5062068732178991,
-      "max_drawdown_C": -158356.91663711407,
-      "score_B": 0.6846432785962323
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "k_sl": 2.0,
-        "k_tp": 1.5,
-        "min_sl_points": 5.0,
-        "min_tp_points": 5.0
-      },
-      "trades_A": 34380,
-      "expectancy_A": -2.6551203062144784,
-      "pf_A": 0.7276553544740613,
-      "max_drawdown_A": -91453.68470120679,
-      "trades_B": 34310,
-      "expectancy_B": -3.402107341866763,
-      "pf_B": 0.6650377687158179,
-      "max_drawdown_B": -116873.33315918817,
-      "trades_C": 34302,
-      "expectancy_C": -5.957690621393129,
-      "pf_C": 0.4842658263194872,
-      "max_drawdown_C": -204477.72694839502,
-      "score_B": 0.6650377687158179
-    }
-  ]
-}
-
-================
-File: runs_tuning_small/tuning_metadata.json
-================
-{
-  "limit_bars": null,
-  "grid_size": "small",
-  "workers": 7,
-  "two_stage": true,
-  "tune_scenario": "B",
-  "total_combinations": 16
-}
-
-================
-File: runs_tuning_small/tuning_results.json
-================
-{
-  "metadata": {
-    "limit_bars": null,
-    "grid_size": "small",
-    "workers": 7,
-    "two_stage": true,
-    "tune_scenario": "B",
-    "total_combinations": 16
-  },
-  "results": [
-    {
-      "params": {
-        "ema_fast": 20,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 25,
-        "atr_period": 14,
-        "k_sl": 3.0,
-        "k_tp": 1.5,
-        "min_sl_points": 5.0,
-        "min_tp_points": 5.0
-      },
-      "trades_A": 18408,
-      "expectancy_A": -2.9642533676734577,
-      "pf_A": 0.7450801458285529,
-      "max_drawdown_A": -54740.30681502326,
-      "trades_B": 18285,
-      "expectancy_B": -3.7159735518730703,
-      "pf_B": 0.6914068742173202,
-      "max_drawdown_B": -68117.95272843348,
-      "trades_C": 18065,
-      "expectancy_C": -6.609608549247833,
-      "pf_C": 0.5116114646486816,
-      "max_drawdown_C": -119554.63784428197,
-      "score_B": 0.6914068742173202
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 50,
-        "adx_period": 14,
-        "adx_th": 25,
-        "atr_period": 14,
-        "k_sl": 3.0,
-        "k_tp": 1.5,
-        "min_sl_points": 5.0,
-        "min_tp_points": 5.0
-      },
-      "trades_A": 18446,
-      "expectancy_A": -2.978307184593852,
-      "pf_A": 0.7441718833488247,
-      "max_drawdown_A": -55112.960569367766,
-      "trades_B": 18301,
-      "expectancy_B": -3.7565758637074644,
-      "pf_B": 0.6888291983687186,
-      "max_drawdown_B": -68920.03163360382,
-      "trades_C": 18067,
-      "expectancy_C": -6.625851433878426,
-      "pf_C": 0.5107176472347835,
-      "max_drawdown_C": -119851.23673524514,
-      "score_B": 0.6888291983687186
-    },
-    {
-      "params": {
-        "ema_fast": 20,
-        "ema_slow": 50,
-        "adx_period": 14,
-        "adx_th": 25,
-        "atr_period": 14,
-        "k_sl": 3.0,
-        "k_tp": 1.5,
-        "min_sl_points": 5.0,
-        "min_tp_points": 5.0
-      },
-      "trades_A": 18456,
-      "expectancy_A": -2.8795437597896836,
-      "pf_A": 0.7516019830086156,
-      "max_drawdown_A": -53319.96587302789,
-      "trades_B": 18326,
-      "expectancy_B": -3.661680787960294,
-      "pf_B": 0.6953242925617606,
-      "max_drawdown_B": -67274.89887205366,
-      "trades_C": 18070,
-      "expectancy_C": -6.525397287832631,
-      "pf_C": 0.515829365508151,
-      "max_drawdown_C": -118055.90787049924,
-      "score_B": 0.6953242925617606
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 25,
-        "atr_period": 14,
-        "k_sl": 3.0,
-        "k_tp": 1.5,
-        "min_sl_points": 5.0,
-        "min_tp_points": 5.0
-      },
-      "trades_A": 18475,
-      "expectancy_A": -3.0040520812771763,
-      "pf_A": 0.7422139929142965,
-      "max_drawdown_A": -55674.19302448614,
-      "trades_B": 18318,
-      "expectancy_B": -3.75229601006108,
-      "pf_B": 0.6891049125836389,
-      "max_drawdown_B": -68905.93464473296,
-      "trades_C": 18072,
-      "expectancy_C": -6.620517338505225,
-      "pf_C": 0.5118893332531064,
-      "max_drawdown_C": -119798.04874358635,
-      "score_B": 0.6891049125836389
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 50,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "k_sl": 3.0,
-        "k_tp": 1.5,
-        "min_sl_points": 5.0,
-        "min_tp_points": 5.0
-      },
-      "trades_A": 24165,
-      "expectancy_A": -2.985144987146362,
-      "pf_A": 0.7417354706446653,
-      "max_drawdown_A": -72620.07754132064,
-      "trades_B": 23965,
-      "expectancy_B": -3.751509898031502,
-      "pf_B": 0.6868843874827255,
-      "max_drawdown_B": -90310.04369018947,
-      "trades_C": 23724,
-      "expectancy_C": -6.6608479732809425,
-      "pf_C": 0.5071887250953244,
-      "max_drawdown_C": -158365.80638685325,
-      "score_B": 0.6868843874827255
-    },
-    {
-      "params": {
-        "ema_fast": 20,
-        "ema_slow": 50,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "k_sl": 3.0,
-        "k_tp": 1.5,
-        "min_sl_points": 5.0,
-        "min_tp_points": 5.0
-      },
-      "trades_A": 24164,
-      "expectancy_A": -2.9333759981222536,
-      "pf_A": 0.7457449899928021,
-      "max_drawdown_A": -71252.97398989697,
-      "trades_B": 23979,
-      "expectancy_B": -3.7100866811039395,
-      "pf_B": 0.6899009805580044,
-      "max_drawdown_B": -89329.66040700547,
-      "trades_C": 23714,
-      "expectancy_C": -6.653648657542836,
-      "pf_C": 0.5076652577500486,
-      "max_drawdown_C": -158128.473333707,
-      "score_B": 0.6899009805580044
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "k_sl": 3.0,
-        "k_tp": 1.5,
-        "min_sl_points": 5.0,
-        "min_tp_points": 5.0
-      },
-      "trades_A": 24195,
-      "expectancy_A": -3.0305662515279495,
-      "pf_A": 0.7383635891321917,
-      "max_drawdown_A": -73610.67855217458,
-      "trades_B": 23996,
-      "expectancy_B": -3.7776131708970513,
-      "pf_B": 0.6849960854501266,
-      "max_drawdown_B": -90912.19731191416,
-      "trades_C": 23723,
-      "expectancy_C": -6.719585981025662,
-      "pf_C": 0.5041831186774269,
-      "max_drawdown_C": -159661.32802107715,
-      "score_B": 0.6849960854501266
-    },
-    {
-      "params": {
-        "ema_fast": 20,
-        "ema_slow": 50,
-        "adx_period": 14,
-        "adx_th": 25,
-        "atr_period": 14,
-        "k_sl": 2.0,
-        "k_tp": 1.5,
-        "min_sl_points": 5.0,
-        "min_tp_points": 5.0
-      },
-      "trades_A": 24732,
-      "expectancy_A": -2.703437220181579,
-      "pf_A": 0.7279016730890152,
-      "max_drawdown_A": -66807.69701088568,
-      "trades_B": 24745,
-      "expectancy_B": -3.488716964304549,
-      "pf_B": 0.6632718387083919,
-      "max_drawdown_B": -86274.18396307123,
-      "trades_C": 24671,
-      "expectancy_C": -6.002424144076171,
-      "pf_C": 0.48756425231907846,
-      "max_drawdown_C": -148029.42548493232,
-      "score_B": 0.6632718387083919
-    },
-    {
-      "params": {
-        "ema_fast": 20,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "k_sl": 3.0,
-        "k_tp": 1.5,
-        "min_sl_points": 5.0,
-        "min_tp_points": 5.0
-      },
-      "trades_A": 24172,
-      "expectancy_A": -3.0115307687248083,
-      "pf_A": 0.7395229558841598,
-      "max_drawdown_A": -73045.75117303708,
-      "trades_B": 24002,
-      "expectancy_B": -3.7790144219392436,
-      "pf_B": 0.6846432785962323,
-      "max_drawdown_B": -90879.89148292072,
-      "trades_C": 23739,
-      "expectancy_C": -6.663841407786431,
-      "pf_C": 0.5062068732178991,
-      "max_drawdown_C": -158356.91663711407,
-      "score_B": 0.6846432785962323
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "k_sl": 2.0,
-        "k_tp": 1.5,
-        "min_sl_points": 5.0,
-        "min_tp_points": 5.0
-      },
-      "trades_A": 34380,
-      "expectancy_A": -2.6551203062144784,
-      "pf_A": 0.7276553544740613,
-      "max_drawdown_A": -91453.68470120679,
-      "trades_B": 34310,
-      "expectancy_B": -3.402107341866763,
-      "pf_B": 0.6650377687158179,
-      "max_drawdown_B": -116873.33315918817,
-      "trades_C": 34302,
-      "expectancy_C": -5.957690621393129,
-      "pf_C": 0.4842658263194872,
-      "max_drawdown_C": -204477.72694839502,
-      "score_B": 0.6650377687158179
-    }
-  ]
-}
-
-================
 File: tests/conftest.py
 ================
 from __future__ import annotations
@@ -5842,6 +5278,570 @@ def _resolve_netting(signals: List[SignalIntent]) -> List[SignalIntent]:
 __all__ = ["resolve_conflicts"]
 
 ================
+File: runs_tuning_small/top_k.json
+================
+{
+  "metadata": {
+    "limit_bars": null,
+    "grid_size": "small",
+    "workers": 7,
+    "two_stage": true,
+    "tune_scenario": "B",
+    "total_combinations": 16
+  },
+  "results": [
+    {
+      "params": {
+        "ema_fast": 20,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 25,
+        "atr_period": 14,
+        "k_sl": 3.0,
+        "k_tp": 1.5,
+        "min_sl_points": 5.0,
+        "min_tp_points": 5.0
+      },
+      "trades_A": 18408,
+      "expectancy_A": -2.9642533676734577,
+      "pf_A": 0.7450801458285529,
+      "max_drawdown_A": -54740.30681502326,
+      "trades_B": 18285,
+      "expectancy_B": -3.7159735518730703,
+      "pf_B": 0.6914068742173202,
+      "max_drawdown_B": -68117.95272843348,
+      "trades_C": 18065,
+      "expectancy_C": -6.609608549247833,
+      "pf_C": 0.5116114646486816,
+      "max_drawdown_C": -119554.63784428197,
+      "score_B": 0.6914068742173202
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 50,
+        "adx_period": 14,
+        "adx_th": 25,
+        "atr_period": 14,
+        "k_sl": 3.0,
+        "k_tp": 1.5,
+        "min_sl_points": 5.0,
+        "min_tp_points": 5.0
+      },
+      "trades_A": 18446,
+      "expectancy_A": -2.978307184593852,
+      "pf_A": 0.7441718833488247,
+      "max_drawdown_A": -55112.960569367766,
+      "trades_B": 18301,
+      "expectancy_B": -3.7565758637074644,
+      "pf_B": 0.6888291983687186,
+      "max_drawdown_B": -68920.03163360382,
+      "trades_C": 18067,
+      "expectancy_C": -6.625851433878426,
+      "pf_C": 0.5107176472347835,
+      "max_drawdown_C": -119851.23673524514,
+      "score_B": 0.6888291983687186
+    },
+    {
+      "params": {
+        "ema_fast": 20,
+        "ema_slow": 50,
+        "adx_period": 14,
+        "adx_th": 25,
+        "atr_period": 14,
+        "k_sl": 3.0,
+        "k_tp": 1.5,
+        "min_sl_points": 5.0,
+        "min_tp_points": 5.0
+      },
+      "trades_A": 18456,
+      "expectancy_A": -2.8795437597896836,
+      "pf_A": 0.7516019830086156,
+      "max_drawdown_A": -53319.96587302789,
+      "trades_B": 18326,
+      "expectancy_B": -3.661680787960294,
+      "pf_B": 0.6953242925617606,
+      "max_drawdown_B": -67274.89887205366,
+      "trades_C": 18070,
+      "expectancy_C": -6.525397287832631,
+      "pf_C": 0.515829365508151,
+      "max_drawdown_C": -118055.90787049924,
+      "score_B": 0.6953242925617606
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 25,
+        "atr_period": 14,
+        "k_sl": 3.0,
+        "k_tp": 1.5,
+        "min_sl_points": 5.0,
+        "min_tp_points": 5.0
+      },
+      "trades_A": 18475,
+      "expectancy_A": -3.0040520812771763,
+      "pf_A": 0.7422139929142965,
+      "max_drawdown_A": -55674.19302448614,
+      "trades_B": 18318,
+      "expectancy_B": -3.75229601006108,
+      "pf_B": 0.6891049125836389,
+      "max_drawdown_B": -68905.93464473296,
+      "trades_C": 18072,
+      "expectancy_C": -6.620517338505225,
+      "pf_C": 0.5118893332531064,
+      "max_drawdown_C": -119798.04874358635,
+      "score_B": 0.6891049125836389
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 50,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "k_sl": 3.0,
+        "k_tp": 1.5,
+        "min_sl_points": 5.0,
+        "min_tp_points": 5.0
+      },
+      "trades_A": 24165,
+      "expectancy_A": -2.985144987146362,
+      "pf_A": 0.7417354706446653,
+      "max_drawdown_A": -72620.07754132064,
+      "trades_B": 23965,
+      "expectancy_B": -3.751509898031502,
+      "pf_B": 0.6868843874827255,
+      "max_drawdown_B": -90310.04369018947,
+      "trades_C": 23724,
+      "expectancy_C": -6.6608479732809425,
+      "pf_C": 0.5071887250953244,
+      "max_drawdown_C": -158365.80638685325,
+      "score_B": 0.6868843874827255
+    },
+    {
+      "params": {
+        "ema_fast": 20,
+        "ema_slow": 50,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "k_sl": 3.0,
+        "k_tp": 1.5,
+        "min_sl_points": 5.0,
+        "min_tp_points": 5.0
+      },
+      "trades_A": 24164,
+      "expectancy_A": -2.9333759981222536,
+      "pf_A": 0.7457449899928021,
+      "max_drawdown_A": -71252.97398989697,
+      "trades_B": 23979,
+      "expectancy_B": -3.7100866811039395,
+      "pf_B": 0.6899009805580044,
+      "max_drawdown_B": -89329.66040700547,
+      "trades_C": 23714,
+      "expectancy_C": -6.653648657542836,
+      "pf_C": 0.5076652577500486,
+      "max_drawdown_C": -158128.473333707,
+      "score_B": 0.6899009805580044
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "k_sl": 3.0,
+        "k_tp": 1.5,
+        "min_sl_points": 5.0,
+        "min_tp_points": 5.0
+      },
+      "trades_A": 24195,
+      "expectancy_A": -3.0305662515279495,
+      "pf_A": 0.7383635891321917,
+      "max_drawdown_A": -73610.67855217458,
+      "trades_B": 23996,
+      "expectancy_B": -3.7776131708970513,
+      "pf_B": 0.6849960854501266,
+      "max_drawdown_B": -90912.19731191416,
+      "trades_C": 23723,
+      "expectancy_C": -6.719585981025662,
+      "pf_C": 0.5041831186774269,
+      "max_drawdown_C": -159661.32802107715,
+      "score_B": 0.6849960854501266
+    },
+    {
+      "params": {
+        "ema_fast": 20,
+        "ema_slow": 50,
+        "adx_period": 14,
+        "adx_th": 25,
+        "atr_period": 14,
+        "k_sl": 2.0,
+        "k_tp": 1.5,
+        "min_sl_points": 5.0,
+        "min_tp_points": 5.0
+      },
+      "trades_A": 24732,
+      "expectancy_A": -2.703437220181579,
+      "pf_A": 0.7279016730890152,
+      "max_drawdown_A": -66807.69701088568,
+      "trades_B": 24745,
+      "expectancy_B": -3.488716964304549,
+      "pf_B": 0.6632718387083919,
+      "max_drawdown_B": -86274.18396307123,
+      "trades_C": 24671,
+      "expectancy_C": -6.002424144076171,
+      "pf_C": 0.48756425231907846,
+      "max_drawdown_C": -148029.42548493232,
+      "score_B": 0.6632718387083919
+    },
+    {
+      "params": {
+        "ema_fast": 20,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "k_sl": 3.0,
+        "k_tp": 1.5,
+        "min_sl_points": 5.0,
+        "min_tp_points": 5.0
+      },
+      "trades_A": 24172,
+      "expectancy_A": -3.0115307687248083,
+      "pf_A": 0.7395229558841598,
+      "max_drawdown_A": -73045.75117303708,
+      "trades_B": 24002,
+      "expectancy_B": -3.7790144219392436,
+      "pf_B": 0.6846432785962323,
+      "max_drawdown_B": -90879.89148292072,
+      "trades_C": 23739,
+      "expectancy_C": -6.663841407786431,
+      "pf_C": 0.5062068732178991,
+      "max_drawdown_C": -158356.91663711407,
+      "score_B": 0.6846432785962323
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "k_sl": 2.0,
+        "k_tp": 1.5,
+        "min_sl_points": 5.0,
+        "min_tp_points": 5.0
+      },
+      "trades_A": 34380,
+      "expectancy_A": -2.6551203062144784,
+      "pf_A": 0.7276553544740613,
+      "max_drawdown_A": -91453.68470120679,
+      "trades_B": 34310,
+      "expectancy_B": -3.402107341866763,
+      "pf_B": 0.6650377687158179,
+      "max_drawdown_B": -116873.33315918817,
+      "trades_C": 34302,
+      "expectancy_C": -5.957690621393129,
+      "pf_C": 0.4842658263194872,
+      "max_drawdown_C": -204477.72694839502,
+      "score_B": 0.6650377687158179
+    }
+  ]
+}
+
+================
+File: runs_tuning_small/tuning_metadata.json
+================
+{
+  "limit_bars": null,
+  "grid_size": "small",
+  "workers": 7,
+  "two_stage": true,
+  "tune_scenario": "B",
+  "total_combinations": 16
+}
+
+================
+File: runs_tuning_small/tuning_results.json
+================
+{
+  "metadata": {
+    "limit_bars": null,
+    "grid_size": "small",
+    "workers": 7,
+    "two_stage": true,
+    "tune_scenario": "B",
+    "total_combinations": 16
+  },
+  "results": [
+    {
+      "params": {
+        "ema_fast": 20,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 25,
+        "atr_period": 14,
+        "k_sl": 3.0,
+        "k_tp": 1.5,
+        "min_sl_points": 5.0,
+        "min_tp_points": 5.0
+      },
+      "trades_A": 18408,
+      "expectancy_A": -2.9642533676734577,
+      "pf_A": 0.7450801458285529,
+      "max_drawdown_A": -54740.30681502326,
+      "trades_B": 18285,
+      "expectancy_B": -3.7159735518730703,
+      "pf_B": 0.6914068742173202,
+      "max_drawdown_B": -68117.95272843348,
+      "trades_C": 18065,
+      "expectancy_C": -6.609608549247833,
+      "pf_C": 0.5116114646486816,
+      "max_drawdown_C": -119554.63784428197,
+      "score_B": 0.6914068742173202
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 50,
+        "adx_period": 14,
+        "adx_th": 25,
+        "atr_period": 14,
+        "k_sl": 3.0,
+        "k_tp": 1.5,
+        "min_sl_points": 5.0,
+        "min_tp_points": 5.0
+      },
+      "trades_A": 18446,
+      "expectancy_A": -2.978307184593852,
+      "pf_A": 0.7441718833488247,
+      "max_drawdown_A": -55112.960569367766,
+      "trades_B": 18301,
+      "expectancy_B": -3.7565758637074644,
+      "pf_B": 0.6888291983687186,
+      "max_drawdown_B": -68920.03163360382,
+      "trades_C": 18067,
+      "expectancy_C": -6.625851433878426,
+      "pf_C": 0.5107176472347835,
+      "max_drawdown_C": -119851.23673524514,
+      "score_B": 0.6888291983687186
+    },
+    {
+      "params": {
+        "ema_fast": 20,
+        "ema_slow": 50,
+        "adx_period": 14,
+        "adx_th": 25,
+        "atr_period": 14,
+        "k_sl": 3.0,
+        "k_tp": 1.5,
+        "min_sl_points": 5.0,
+        "min_tp_points": 5.0
+      },
+      "trades_A": 18456,
+      "expectancy_A": -2.8795437597896836,
+      "pf_A": 0.7516019830086156,
+      "max_drawdown_A": -53319.96587302789,
+      "trades_B": 18326,
+      "expectancy_B": -3.661680787960294,
+      "pf_B": 0.6953242925617606,
+      "max_drawdown_B": -67274.89887205366,
+      "trades_C": 18070,
+      "expectancy_C": -6.525397287832631,
+      "pf_C": 0.515829365508151,
+      "max_drawdown_C": -118055.90787049924,
+      "score_B": 0.6953242925617606
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 25,
+        "atr_period": 14,
+        "k_sl": 3.0,
+        "k_tp": 1.5,
+        "min_sl_points": 5.0,
+        "min_tp_points": 5.0
+      },
+      "trades_A": 18475,
+      "expectancy_A": -3.0040520812771763,
+      "pf_A": 0.7422139929142965,
+      "max_drawdown_A": -55674.19302448614,
+      "trades_B": 18318,
+      "expectancy_B": -3.75229601006108,
+      "pf_B": 0.6891049125836389,
+      "max_drawdown_B": -68905.93464473296,
+      "trades_C": 18072,
+      "expectancy_C": -6.620517338505225,
+      "pf_C": 0.5118893332531064,
+      "max_drawdown_C": -119798.04874358635,
+      "score_B": 0.6891049125836389
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 50,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "k_sl": 3.0,
+        "k_tp": 1.5,
+        "min_sl_points": 5.0,
+        "min_tp_points": 5.0
+      },
+      "trades_A": 24165,
+      "expectancy_A": -2.985144987146362,
+      "pf_A": 0.7417354706446653,
+      "max_drawdown_A": -72620.07754132064,
+      "trades_B": 23965,
+      "expectancy_B": -3.751509898031502,
+      "pf_B": 0.6868843874827255,
+      "max_drawdown_B": -90310.04369018947,
+      "trades_C": 23724,
+      "expectancy_C": -6.6608479732809425,
+      "pf_C": 0.5071887250953244,
+      "max_drawdown_C": -158365.80638685325,
+      "score_B": 0.6868843874827255
+    },
+    {
+      "params": {
+        "ema_fast": 20,
+        "ema_slow": 50,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "k_sl": 3.0,
+        "k_tp": 1.5,
+        "min_sl_points": 5.0,
+        "min_tp_points": 5.0
+      },
+      "trades_A": 24164,
+      "expectancy_A": -2.9333759981222536,
+      "pf_A": 0.7457449899928021,
+      "max_drawdown_A": -71252.97398989697,
+      "trades_B": 23979,
+      "expectancy_B": -3.7100866811039395,
+      "pf_B": 0.6899009805580044,
+      "max_drawdown_B": -89329.66040700547,
+      "trades_C": 23714,
+      "expectancy_C": -6.653648657542836,
+      "pf_C": 0.5076652577500486,
+      "max_drawdown_C": -158128.473333707,
+      "score_B": 0.6899009805580044
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "k_sl": 3.0,
+        "k_tp": 1.5,
+        "min_sl_points": 5.0,
+        "min_tp_points": 5.0
+      },
+      "trades_A": 24195,
+      "expectancy_A": -3.0305662515279495,
+      "pf_A": 0.7383635891321917,
+      "max_drawdown_A": -73610.67855217458,
+      "trades_B": 23996,
+      "expectancy_B": -3.7776131708970513,
+      "pf_B": 0.6849960854501266,
+      "max_drawdown_B": -90912.19731191416,
+      "trades_C": 23723,
+      "expectancy_C": -6.719585981025662,
+      "pf_C": 0.5041831186774269,
+      "max_drawdown_C": -159661.32802107715,
+      "score_B": 0.6849960854501266
+    },
+    {
+      "params": {
+        "ema_fast": 20,
+        "ema_slow": 50,
+        "adx_period": 14,
+        "adx_th": 25,
+        "atr_period": 14,
+        "k_sl": 2.0,
+        "k_tp": 1.5,
+        "min_sl_points": 5.0,
+        "min_tp_points": 5.0
+      },
+      "trades_A": 24732,
+      "expectancy_A": -2.703437220181579,
+      "pf_A": 0.7279016730890152,
+      "max_drawdown_A": -66807.69701088568,
+      "trades_B": 24745,
+      "expectancy_B": -3.488716964304549,
+      "pf_B": 0.6632718387083919,
+      "max_drawdown_B": -86274.18396307123,
+      "trades_C": 24671,
+      "expectancy_C": -6.002424144076171,
+      "pf_C": 0.48756425231907846,
+      "max_drawdown_C": -148029.42548493232,
+      "score_B": 0.6632718387083919
+    },
+    {
+      "params": {
+        "ema_fast": 20,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "k_sl": 3.0,
+        "k_tp": 1.5,
+        "min_sl_points": 5.0,
+        "min_tp_points": 5.0
+      },
+      "trades_A": 24172,
+      "expectancy_A": -3.0115307687248083,
+      "pf_A": 0.7395229558841598,
+      "max_drawdown_A": -73045.75117303708,
+      "trades_B": 24002,
+      "expectancy_B": -3.7790144219392436,
+      "pf_B": 0.6846432785962323,
+      "max_drawdown_B": -90879.89148292072,
+      "trades_C": 23739,
+      "expectancy_C": -6.663841407786431,
+      "pf_C": 0.5062068732178991,
+      "max_drawdown_C": -158356.91663711407,
+      "score_B": 0.6846432785962323
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "k_sl": 2.0,
+        "k_tp": 1.5,
+        "min_sl_points": 5.0,
+        "min_tp_points": 5.0
+      },
+      "trades_A": 34380,
+      "expectancy_A": -2.6551203062144784,
+      "pf_A": 0.7276553544740613,
+      "max_drawdown_A": -91453.68470120679,
+      "trades_B": 34310,
+      "expectancy_B": -3.402107341866763,
+      "pf_B": 0.6650377687158179,
+      "max_drawdown_B": -116873.33315918817,
+      "trades_C": 34302,
+      "expectancy_C": -5.957690621393129,
+      "pf_C": 0.4842658263194872,
+      "max_drawdown_C": -204477.72694839502,
+      "score_B": 0.6650377687158179
+    }
+  ]
+}
+
+================
 File: runs_tuning/top_k.json
 ================
 {
@@ -10176,87 +10176,6 @@ def test_val_thresholds_ignore_test_data() -> None:
     assert list(filtered_high.index) == list(filtered_low.index)
 
 ================
-File: tuning/grid.py
-================
-from __future__ import annotations
-
-from itertools import product
-from typing import Any, Dict, List, Literal
-
-
-def build_grid_s1(preset: Literal["small", "medium", "large"] = "medium"):
-    if preset == "small":
-        ema_fast_vals = [20, 30]
-        ema_slow_vals = [50, 100]
-
-        adx_period_vals = [14]
-        adx_th_vals = [20, 25]
-
-        atr_period_vals = [14]
-
-        k_sl_vals = [2.0, 3.0]
-        k_tp_vals = [1.5]
-
-        min_sl_points_vals = [5.0]
-        min_tp_points_vals = [5.0]
-
-    elif preset == "medium":
-        ema_fast_vals = [10, 20, 30]
-        ema_slow_vals = [50, 100]
-
-        adx_period_vals = [10, 14, 20]
-        adx_th_vals = [20, 25, 30]
-
-        atr_period_vals = [10, 14, 20]
-
-        k_sl_vals = [2.0, 3.0]
-        k_tp_vals = [1.0, 1.5, 2.0]
-
-        min_sl_points_vals = [5.0]
-        min_tp_points_vals = [5.0]
-
-    else:
-        raise ValueError("Large preset not recommended yet")
-
-    return [
-        {
-            "ema_fast": ef,
-            "ema_slow": es,
-            "adx_period": ap,
-            "adx_th": ath,
-            "atr_period": atrp,
-            "k_sl": ksl,
-            "k_tp": ktp,
-            "min_sl_points": msl,
-            "min_tp_points": mtp,
-        }
-        for ef, es, ap, ath, atrp, ksl, ktp, msl, mtp in product(
-            ema_fast_vals,
-            ema_slow_vals,
-            adx_period_vals,
-            adx_th_vals,
-            atr_period_vals,
-            k_sl_vals,
-            k_tp_vals,
-            min_sl_points_vals,
-            min_tp_points_vals,
-        )
-    ]
-    return grid
-
-
-def build_grid(strategy_id: str, preset: Literal["small", "medium", "large"] = "medium") -> List[Dict[str, Any]]:
-    """Build grid for given strategy with preset size.
-    
-    Args:
-        strategy_id: Strategy identifier
-        preset: Grid size (small, medium, large)
-    """
-    if strategy_id == "S1_TREND_EMA_ATR_ADX":
-        return build_grid_s1(preset)
-    raise ValueError(f"Grid not defined for strategy: {strategy_id}")
-
-================
 File: validation/filter_tuner.py
 ================
 from __future__ import annotations
@@ -10548,162 +10467,6 @@ def rolling_percentile(series: pd.Series, window: int) -> pd.Series:
         return values.rank(pct=True).iloc[-1]
 
     return series.rolling(window, min_periods=window).apply(_percentile, raw=False)
-
-================
-File: runs/report.json
-================
-{
-  "metrics": {
-    "by_regime": {
-      "VOL=HIGH|SPIKE=0": {
-        "cvar_95": -72.25970951308189,
-        "expectancy": -2.1476349071755463,
-        "max_drawdown": -25789.24709287487,
-        "max_loss_streak": 11.0,
-        "max_win_streak": 12.0,
-        "profit_factor": 0.8612714257488455,
-        "trades": 10691.0
-      },
-      "VOL=HIGH|SPIKE=1": {
-        "cvar_95": -69.90054531751792,
-        "expectancy": -7.116973030430035,
-        "max_drawdown": -4235.36076202833,
-        "max_loss_streak": 11.0,
-        "max_win_streak": 5.0,
-        "profit_factor": 0.6180209103481926,
-        "trades": 562.0
-      },
-      "VOL=LOW|SPIKE=0": {
-        "cvar_95": -57.239980263261586,
-        "expectancy": -5.822058691642025,
-        "max_drawdown": -45079.63033949721,
-        "max_loss_streak": 9.0,
-        "max_win_streak": 11.0,
-        "profit_factor": 0.5615002879730482,
-        "trades": 7711.0
-      },
-      "VOL=LOW|SPIKE=1": {
-        "cvar_95": -47.11382826935547,
-        "expectancy": -1.230469263484915,
-        "max_drawdown": -832.771442621643,
-        "max_loss_streak": 6.0,
-        "max_win_streak": 11.0,
-        "profit_factor": 0.8861335347680039,
-        "trades": 303.0
-      },
-      "VOL=MID|SPIKE=0": {
-        "cvar_95": -60.84675411364738,
-        "expectancy": -5.01288485920046,
-        "max_drawdown": -60839.72887294173,
-        "max_loss_streak": 9.0,
-        "max_win_streak": 13.0,
-        "profit_factor": 0.6415598585866918,
-        "trades": 12107.0
-      },
-      "VOL=MID|SPIKE=1": {
-        "cvar_95": -58.97226848237349,
-        "expectancy": 0.5715468937652863,
-        "max_drawdown": -626.7933715956796,
-        "max_loss_streak": 5.0,
-        "max_win_streak": 13.0,
-        "profit_factor": 1.0523981670994997,
-        "trades": 447.0
-      },
-      "VOL=UNKNOWN|SPIKE=0": {
-        "cvar_95": -103.27050516069609,
-        "expectancy": -0.9288343310130994,
-        "max_drawdown": -321.21040221285324,
-        "max_loss_streak": 3.0,
-        "max_win_streak": 3.0,
-        "profit_factor": 0.970256657883441,
-        "trades": 51.0
-      },
-      "VOL=UNKNOWN|SPIKE=1": {
-        "cvar_95": -126.70908158775222,
-        "expectancy": -38.97676034442134,
-        "max_drawdown": -203.1829499667555,
-        "max_loss_streak": 1.0,
-        "max_win_streak": 1.0,
-        "profit_factor": 0.37408411466665054,
-        "trades": 6.0
-      }
-    },
-    "by_scenario": {
-      "A": {
-        "cvar_95": -63.72515260218951,
-        "expectancy": -2.584341957633445,
-        "max_drawdown": -27988.687130046976,
-        "max_loss_streak": 9.0,
-        "max_win_streak": 20.0,
-        "profit_factor": 0.8091312059680208,
-        "trades": 10688.0
-      },
-      "B": {
-        "cvar_95": -64.24184832019954,
-        "expectancy": -3.4075124771632104,
-        "max_drawdown": -36548.85122633459,
-        "max_loss_streak": 9.0,
-        "max_win_streak": 20.0,
-        "profit_factor": 0.756294401073355,
-        "trades": 10624.0
-      },
-      "C": {
-        "cvar_95": -66.99428190446108,
-        "expectancy": -6.5418055683333245,
-        "max_drawdown": -69352.05787815877,
-        "max_loss_streak": 13.0,
-        "max_win_streak": 14.0,
-        "profit_factor": 0.5798988983954447,
-        "trades": 10566.0
-      }
-    },
-    "by_strategy": {
-      "s1_trend_ema_atr_adx": {
-        "cvar_95": -65.07636532872631,
-        "expectancy": -4.170386380437232,
-        "max_drawdown": -133274.80227278828,
-        "max_loss_streak": 13.0,
-        "max_win_streak": 20.0,
-        "profit_factor": 0.7095992603632459,
-        "trades": 31878.0
-      }
-    },
-    "by_symbol": {
-      "EURUSD": {
-        "cvar_95": -65.07636532872631,
-        "expectancy": -4.170386380437232,
-        "max_drawdown": -133274.80227278828,
-        "max_loss_streak": 13.0,
-        "max_win_streak": 20.0,
-        "profit_factor": 0.7095992603632459,
-        "trades": 31878.0
-      }
-    },
-    "overall": {
-      "cvar_95": -65.07636532872631,
-      "expectancy": -4.170386380437232,
-      "max_drawdown": -133274.80227278828,
-      "max_loss_streak": 13.0,
-      "max_win_streak": 20.0,
-      "profit_factor": 0.7095992603632459,
-      "trades": 31878.0
-    }
-  },
-  "summary": {
-    "scenarios": [
-      "A",
-      "B",
-      "C"
-    ],
-    "strategies": [
-      "s1_trend_ema_atr_adx"
-    ],
-    "symbols": [
-      "EURUSD"
-    ],
-    "total_trades": 31878
-  }
-}
 
 ================
 File: tests/test_backtest.py
@@ -11165,6 +10928,252 @@ def test_backtest_runs_medium_dataset() -> None:
 
     assert not trades.empty
     assert trades["regime_snapshot"].str.contains("VOL=").all()
+
+================
+File: tuning/grid.py
+================
+from __future__ import annotations
+
+from itertools import product
+from typing import Any, Dict, List, Literal
+
+
+def build_grid_s1(preset: Literal["small", "medium", "large"] = "medium"):
+    if preset == "small":
+        breakout_lookback_vals = [20, 55]
+        buffer_atr_vals = [0.0, 0.1, 0.2]
+        cooldown_bars_vals = [0, 8]
+
+        ema_fast_vals = [20, 30]
+        ema_slow_vals = [50, 100]
+
+        adx_period_vals = [14]
+        adx_th_vals = [20, 25]
+
+        atr_period_vals = [14]
+
+        k_sl_vals = [2.0, 3.0]
+        k_tp_vals = [1.5]
+
+        min_sl_points_vals = [5.0]
+        min_tp_points_vals = [5.0]
+
+    elif preset == "medium":
+        ema_fast_vals = [10, 20, 30]
+        ema_slow_vals = [50, 100]
+
+        adx_period_vals = [10, 14, 20]
+        adx_th_vals = [20, 25, 30]
+
+        atr_period_vals = [10, 14, 20]
+
+        k_sl_vals = [2.0, 3.0]
+        k_tp_vals = [1.0, 1.5, 2.0]
+
+        min_sl_points_vals = [5.0]
+        min_tp_points_vals = [5.0]
+
+    else:
+        raise ValueError("Large preset not recommended yet")
+
+    return [
+        {
+            "ema_fast": ef,
+            "ema_slow": es,
+            "adx_period": ap,
+            "adx_th": ath,
+            "atr_period": atrp,
+            "k_sl": ksl,
+            "k_tp": ktp,
+            "min_sl_points": msl,
+            "min_tp_points": mtp,
+            "breakout_lookback": bl,
+            "buffer_atr": ba,
+            "cooldown_bars": cd,
+        }
+        for ef, es, ap, ath, atrp, ksl, ktp, msl, mtp, bl, ba, cd in product(
+            ema_fast_vals,
+            ema_slow_vals,
+            adx_period_vals,
+            adx_th_vals,
+            atr_period_vals,
+            k_sl_vals,
+            k_tp_vals,
+            min_sl_points_vals,
+            min_tp_points_vals,
+            breakout_lookback_vals,
+            buffer_atr_vals,
+            cooldown_bars_vals,
+        )
+    ]
+
+
+def build_grid(strategy_id: str, preset: Literal["small", "medium", "large"] = "medium") -> List[Dict[str, Any]]:
+    """Build grid for given strategy with preset size.
+    
+    Args:
+        strategy_id: Strategy identifier
+        preset: Grid size (small, medium, large)
+    """
+    if strategy_id == "S1_TREND_BREAKOUT_DONCHIAN":
+        return build_grid_s1(preset)
+    raise ValueError(f"Grid not defined for strategy: {strategy_id}")
+
+================
+File: runs/report.json
+================
+{
+  "metrics": {
+    "by_regime": {
+      "VOL=HIGH|SPIKE=0": {
+        "cvar_95": -72.25970951308189,
+        "expectancy": -2.1476349071755463,
+        "max_drawdown": -25789.24709287487,
+        "max_loss_streak": 11.0,
+        "max_win_streak": 12.0,
+        "profit_factor": 0.8612714257488455,
+        "trades": 10691.0
+      },
+      "VOL=HIGH|SPIKE=1": {
+        "cvar_95": -69.90054531751792,
+        "expectancy": -7.116973030430035,
+        "max_drawdown": -4235.36076202833,
+        "max_loss_streak": 11.0,
+        "max_win_streak": 5.0,
+        "profit_factor": 0.6180209103481926,
+        "trades": 562.0
+      },
+      "VOL=LOW|SPIKE=0": {
+        "cvar_95": -57.239980263261586,
+        "expectancy": -5.822058691642025,
+        "max_drawdown": -45079.63033949721,
+        "max_loss_streak": 9.0,
+        "max_win_streak": 11.0,
+        "profit_factor": 0.5615002879730482,
+        "trades": 7711.0
+      },
+      "VOL=LOW|SPIKE=1": {
+        "cvar_95": -47.11382826935547,
+        "expectancy": -1.230469263484915,
+        "max_drawdown": -832.771442621643,
+        "max_loss_streak": 6.0,
+        "max_win_streak": 11.0,
+        "profit_factor": 0.8861335347680039,
+        "trades": 303.0
+      },
+      "VOL=MID|SPIKE=0": {
+        "cvar_95": -60.84675411364738,
+        "expectancy": -5.01288485920046,
+        "max_drawdown": -60839.72887294173,
+        "max_loss_streak": 9.0,
+        "max_win_streak": 13.0,
+        "profit_factor": 0.6415598585866918,
+        "trades": 12107.0
+      },
+      "VOL=MID|SPIKE=1": {
+        "cvar_95": -58.97226848237349,
+        "expectancy": 0.5715468937652863,
+        "max_drawdown": -626.7933715956796,
+        "max_loss_streak": 5.0,
+        "max_win_streak": 13.0,
+        "profit_factor": 1.0523981670994997,
+        "trades": 447.0
+      },
+      "VOL=UNKNOWN|SPIKE=0": {
+        "cvar_95": -103.27050516069609,
+        "expectancy": -0.9288343310130994,
+        "max_drawdown": -321.21040221285324,
+        "max_loss_streak": 3.0,
+        "max_win_streak": 3.0,
+        "profit_factor": 0.970256657883441,
+        "trades": 51.0
+      },
+      "VOL=UNKNOWN|SPIKE=1": {
+        "cvar_95": -126.70908158775222,
+        "expectancy": -38.97676034442134,
+        "max_drawdown": -203.1829499667555,
+        "max_loss_streak": 1.0,
+        "max_win_streak": 1.0,
+        "profit_factor": 0.37408411466665054,
+        "trades": 6.0
+      }
+    },
+    "by_scenario": {
+      "A": {
+        "cvar_95": -63.72515260218951,
+        "expectancy": -2.584341957633445,
+        "max_drawdown": -27988.687130046976,
+        "max_loss_streak": 9.0,
+        "max_win_streak": 20.0,
+        "profit_factor": 0.8091312059680208,
+        "trades": 10688.0
+      },
+      "B": {
+        "cvar_95": -64.24184832019954,
+        "expectancy": -3.4075124771632104,
+        "max_drawdown": -36548.85122633459,
+        "max_loss_streak": 9.0,
+        "max_win_streak": 20.0,
+        "profit_factor": 0.756294401073355,
+        "trades": 10624.0
+      },
+      "C": {
+        "cvar_95": -66.99428190446108,
+        "expectancy": -6.5418055683333245,
+        "max_drawdown": -69352.05787815877,
+        "max_loss_streak": 13.0,
+        "max_win_streak": 14.0,
+        "profit_factor": 0.5798988983954447,
+        "trades": 10566.0
+      }
+    },
+    "by_strategy": {
+      "s1_trend_ema_atr_adx": {
+        "cvar_95": -65.07636532872631,
+        "expectancy": -4.170386380437232,
+        "max_drawdown": -133274.80227278828,
+        "max_loss_streak": 13.0,
+        "max_win_streak": 20.0,
+        "profit_factor": 0.7095992603632459,
+        "trades": 31878.0
+      }
+    },
+    "by_symbol": {
+      "EURUSD": {
+        "cvar_95": -65.07636532872631,
+        "expectancy": -4.170386380437232,
+        "max_drawdown": -133274.80227278828,
+        "max_loss_streak": 13.0,
+        "max_win_streak": 20.0,
+        "profit_factor": 0.7095992603632459,
+        "trades": 31878.0
+      }
+    },
+    "overall": {
+      "cvar_95": -65.07636532872631,
+      "expectancy": -4.170386380437232,
+      "max_drawdown": -133274.80227278828,
+      "max_loss_streak": 13.0,
+      "max_win_streak": 20.0,
+      "profit_factor": 0.7095992603632459,
+      "trades": 31878.0
+    }
+  },
+  "summary": {
+    "scenarios": [
+      "A",
+      "B",
+      "C"
+    ],
+    "strategies": [
+      "s1_trend_ema_atr_adx"
+    ],
+    "symbols": [
+      "EURUSD"
+    ],
+    "total_trades": 31878
+  }
+}
 
 ================
 File: strategies/s1_trend_ema_atr_adx.py

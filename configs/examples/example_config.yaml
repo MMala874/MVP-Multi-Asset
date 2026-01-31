@@ -16,7 +16,7 @@ regime:
   spike_tr_atr_th: 2.5
 strategies:
   enabled:
-    - S1_TREND_EMA_ATR_ADX
+    - S1_TREND_BREAKOUT_DONCHIAN
   params:
     S1_TREND_EMA_ATR_ADX:
       ema_fast: 20
@@ -38,6 +38,29 @@ strategies:
       atr_period: 14
       k_sl: 2.0
       min_sl_points: 5.0
+    S1_TREND_BREAKOUT_DONCHIAN:
+      # Trend regime
+      ema_fast: 30
+      ema_slow: 100
+      adx_period: 14
+      adx_th: 25
+      adx_rising: false
+
+      # Breakout timing
+      breakout_lookback: 55
+      buffer_atr: 0.1          # buffer = 0.1 * ATR(price)
+      allowed_vol_regimes: ["MID", "HIGH"]
+      spike_block: false       # true solo dopo
+
+      # Anti-overtrading
+      cooldown_bars: 8         # 2 ore su M15
+
+      # Risk / exits
+      atr_period: 14
+      k_sl: 2.5
+      k_tp: 1.5
+      min_sl_points: 8.0
+      min_tp_points: 5.0
 risk:
   max_hold_bars: 96
   r_base: 0.002
