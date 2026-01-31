@@ -35,7 +35,7 @@ def test_worker_output_structure() -> None:
     """Test worker function output for one parameter set."""
     with tempfile.TemporaryDirectory() as tmpdir:
         eurusd_data = {
-            "time": pd.date_range("2024-01-01", periods=100, freq="H"),
+            "time": pd.date_range("2024-01-01", periods=100, freq="1h"),
             "open": [1.0 + i * 0.0001 for i in range(100)],
             "high": [1.01 + i * 0.0001 for i in range(100)],
             "low": [0.99 + i * 0.0001 for i in range(100)],
