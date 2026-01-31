@@ -128,8 +128,42 @@ def test_metrics_use_pnl_pips_when_available():
     
     # Expectancy should be based on pnl_pips (10 - 5 + 7.5) / 3 = 4.166...
     expected_expectancy = (10.0 - 5.0 + 7.5) / 3
-    assert abs(overall["expectancy"] - expected_expectancy) < 0.01
+    assert abs(overall["expectancy"] - expected_expectancy) < 0.01, \
+        f"Expected expectancy {expected_expectancy}, got {overall['expectancy']}"
     
     # Profit factor should be based on pnl_pips: (10 + 7.5) / abs(-5) = 3.5
     expected_profit_factor = (10.0 + 7.5) / abs(-5.0)
-    assert abs(overall["profit_factor"] - expected_profit_factor) < 0.01
+    assert abs(overall["profit_factor"] - expected_profit_factor) < 0.01, \
+        f"Expected PF {expected_profit_factor}, got {overall['profit_factor']}"
+    
+    # Max drawdown computed from pnl_pips cumsum: [10, 5, 12.5]
+    # Cummax: [10, 10, 12.5]
+    # Drawdown: [0, -5, 0]
+    # Min: -5.0
+    expected_max_dd = -5.0
+    assert abs(overall["max_drawdown"] - expected_max_dd) < 0.01, \
+        f"Expected max_dd {expected_max_dd}, got {overall['max_drawdown']}"
+
+
+def test_metrics_fallback_to_pnl_without_pnl_pips():
+    """Verify metrics fallback to pnl when pnl_pips is not available."""
+    trades_df = pd.DataFrame({
+        "pnl": [10.0, -5.0, 7.5],
+        "strategy_id": ["S1", "S1", "S1"],
+        "symbol": ["EURUSD", "EURUSD", "EURUSD"],
+        "regime_snapshot": ["A", "A", "A"],
+        "scenario": ["A", "A", "A"],
+    })
+    
+    metrics = compute_metrics(trades_df)
+    overall = metrics["overall"]
+    
+    # Expectancy should be based on pnl (10 - 5 + 7.5) / 3 = 4.166...
+    expected_expectancy = (10.0 - 5.0 + 7.5) / 3
+    assert abs(overall["expectancy"] - expected_expectancy) < 0.01, \
+        f"Expected expectancy {expected_expectancy}, got {overall['expectancy']}"
+    
+    # Profit factor: (10 + 7.5) / abs(-5) = 3.5
+    expected_profit_factor = (10.0 + 7.5) / abs(-5.0)
+    assert abs(overall["profit_factor"] - expected_profit_factor) < 0.01, \
+        f"Expected PF {expected_profit_factor}, got {overall['profit_factor']}"
