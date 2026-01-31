@@ -10,13 +10,130 @@ from configs.loader import load_config
 from data.io import load_ohlc_csv
 
 
+def run_worker_single_scenario(
+    config_path: str,
+    strategy_id: str,
+    param_set: Dict[str, Any],
+    df_paths: Dict[str, str],
+    scenario: str,
+) -> Dict[str, Any]:
+    """Worker function: evaluate one parameter set for a single scenario (fast tuning).
+    
+    Args:
+        config_path: Path to YAML config
+        strategy_id: Strategy to tune
+        param_set: Parameter combination to test
+        df_paths: Dict mapping symbol -> CSV path
+        scenario: Scenario to evaluate (A, B, or C)
+    
+    Returns:
+        Dict with params and metrics for the specified scenario only.
+        Always includes score_B (using the tuning scenario's profit_factor).
+    """
+    cfg = load_config(config_path)
+
+    df_by_symbol: Dict[str, pd.DataFrame] = {}
+    for symbol, path in df_paths.items():
+        if path:
+            df_by_symbol[symbol] = load_ohlc_csv(path)
+
+    cfg_copy = copy.deepcopy(cfg)
+    cfg_copy.strategies.enabled = [strategy_id]
+    cfg_copy.strategies.params[strategy_id] = param_set
+
+    orchestrator = BacktestOrchestrator()
+    trades, report = orchestrator.run(df_by_symbol, cfg_copy)
+
+    metrics_by_scenario = report.get("metrics", {}).get("by_scenario", {})
+    scenario_metrics = metrics_by_scenario.get(scenario, {})
+
+    trades_count = int(scenario_metrics.get("trades", 0))
+    expectancy = float(scenario_metrics.get("expectancy", 0.0))
+    pf = float(scenario_metrics.get("profit_factor", 0.0))
+    max_dd = float(scenario_metrics.get("max_drawdown", 0.0))
+
+    result = {"params": param_set}
+    result[f"trades_{scenario}"] = trades_count
+    result[f"expectancy_{scenario}"] = expectancy
+    result[f"pf_{scenario}"] = pf
+    result[f"max_drawdown_{scenario}"] = max_dd
+
+    # Score is based on the tuning scenario's pf
+    score = pf
+    if trades_count < 300:
+        score *= 0.25
+
+    result["score_B"] = score
+
+    return result
+
+
+def run_worker_full_scenarios(
+    config_path: str,
+    strategy_id: str,
+    param_set: Dict[str, Any],
+    df_paths: Dict[str, str],
+) -> Dict[str, Any]:
+    """Worker function: evaluate one parameter set across all scenarios (full eval for top_k).
+    
+    Args:
+        config_path: Path to YAML config
+        strategy_id: Strategy to tune
+        param_set: Parameter combination to test
+        df_paths: Dict mapping symbol -> CSV path
+    
+    Returns:
+        Dict with params and metrics for all scenarios, plus score_B.
+    """
+    cfg = load_config(config_path)
+
+    df_by_symbol: Dict[str, pd.DataFrame] = {}
+    for symbol, path in df_paths.items():
+        if path:
+            df_by_symbol[symbol] = load_ohlc_csv(path)
+
+    cfg_copy = copy.deepcopy(cfg)
+    cfg_copy.strategies.enabled = [strategy_id]
+    cfg_copy.strategies.params[strategy_id] = param_set
+
+    orchestrator = BacktestOrchestrator()
+    trades, report = orchestrator.run(df_by_symbol, cfg_copy)
+
+    metrics_by_scenario = report.get("metrics", {}).get("by_scenario", {})
+
+    result = {"params": param_set}
+
+    for scen in ["A", "B", "C"]:
+        scenario_metrics = metrics_by_scenario.get(scen, {})
+        trades_count = int(scenario_metrics.get("trades", 0))
+        expectancy = float(scenario_metrics.get("expectancy", 0.0))
+        pf = float(scenario_metrics.get("profit_factor", 0.0))
+        max_dd = float(scenario_metrics.get("max_drawdown", 0.0))
+
+        result[f"trades_{scen}"] = trades_count
+        result[f"expectancy_{scen}"] = expectancy
+        result[f"pf_{scen}"] = pf
+        result[f"max_drawdown_{scen}"] = max_dd
+
+    # Compute score_B (for consistency with overall scoring)
+    trades_b = result.get("trades_B", 0)
+    pf_b = result.get("pf_B", 0.0)
+    score = pf_b
+    if trades_b < 300:
+        score *= 0.25
+
+    result["score_B"] = score
+
+    return result
+
+
 def run_worker(
     config_path: str,
     strategy_id: str,
     param_set: Dict[str, Any],
     df_paths: Dict[str, str],
 ) -> Dict[str, Any]:
-    """Worker function: evaluate one parameter set across all scenarios.
+    """Legacy worker function: evaluate one parameter set across all scenarios.
     
     Args:
         config_path: Path to YAML config

@@ -12,7 +12,11 @@ from typing import Any, Dict, List
 import pandas as pd
 
 from tuning.grid import build_grid
-from tuning.worker import run_worker
+from tuning.worker import (
+    run_worker,
+    run_worker_single_scenario,
+    run_worker_full_scenarios,
+)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -66,6 +70,19 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         default=True,
         help="Show estimated time of arrival.",
+    )
+    parser.add_argument(
+        "--two_stage",
+        action="store_true",
+        default=True,
+        help="Use two-stage tuning: fast B-only, then full A/B/C for top_k.",
+    )
+    parser.add_argument(
+        "--tune_scenario",
+        type=str,
+        choices=["A", "B", "C"],
+        default="B",
+        help="Scenario to use for stage-1 grid search (default: B).",
     )
 
     args = parser.parse_args()
@@ -146,6 +163,108 @@ def main() -> None:
     num_workers = args.workers if args.workers else _get_worker_count()
     print(f"Using {num_workers} workers")
 
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.two_stage:
+        print(f"\n=== STAGE 1: Fast {args.tune_scenario}-only Grid Search ===")
+        results_stage1 = _run_stage1_fast_search(
+            args, grid, df_paths, num_workers
+        )
+
+        print(f"\n=== STAGE 2: Full A/B/C Evaluation for Top-K ===")
+        results_final = _run_stage2_topk_evaluation(
+            args, results_stage1, df_paths, num_workers
+        )
+    else:
+        print(f"\n=== Single Stage: Full A/B/C for all combinations ===")
+        results_final = _run_single_stage(
+            args, grid, df_paths, num_workers
+        )
+
+    _save_results(results_final, args, out_dir)
+
+
+def _run_stage1_fast_search(
+    args: argparse.Namespace,
+    grid: List[Dict[str, Any]],
+    df_paths: Dict[str, str],
+    num_workers: int,
+) -> List[Dict[str, Any]]:
+    """Stage 1: Fast grid search evaluating only tune_scenario."""
+    worker_inputs = [
+        (args.config, args.strategy_id, params, df_paths, args.tune_scenario)
+        for params in grid
+    ]
+
+    results: List[Dict[str, Any]] = []
+    best_result: Dict[str, Any] = {}
+    start_time = time.time()
+
+    with Pool(processes=num_workers) as pool:
+        for i, result in enumerate(
+            pool.starmap(run_worker_single_scenario, worker_inputs), 1
+        ):
+            results.append(result)
+
+            # Always use score_B for consistency across all phases
+            if result.get("score_B", float("-inf")) > best_result.get("score_B", float("-inf")):
+                best_result = result
+
+            if i % args.progress_every == 0 or i == len(grid):
+                elapsed = time.time() - start_time
+                _print_progress(i, len(grid), elapsed, best_result, args.show_eta)
+
+    print(f"\nStage 1 complete: {len(results)} evaluated")
+    return results
+
+
+def _run_stage2_topk_evaluation(
+    args: argparse.Namespace,
+    results_stage1: List[Dict[str, Any]],
+    df_paths: Dict[str, str],
+    num_workers: int,
+) -> List[Dict[str, Any]]:
+    """Stage 2: Comprehensive A/B/C evaluation for top-K candidates."""
+    df_temp = pd.DataFrame(results_stage1)
+    score_col = f"score_{args.tune_scenario}"
+    df_sorted = df_temp.sort_values(by=score_col, ascending=False)
+    top_k_results_stage1 = df_sorted.head(args.top_k).to_dict("records")
+
+    print(f"Evaluating top {len(top_k_results_stage1)} candidates with full A/B/C scenarios...")
+
+    top_k_params = [r["params"] for r in top_k_results_stage1]
+    worker_inputs = [
+        (args.config, args.strategy_id, params, df_paths) for params in top_k_params
+    ]
+
+    results_topk: List[Dict[str, Any]] = []
+    best_result: Dict[str, Any] = {}
+    start_time = time.time()
+
+    with Pool(processes=num_workers) as pool:
+        for i, result in enumerate(
+            pool.starmap(run_worker_full_scenarios, worker_inputs), 1
+        ):
+            results_topk.append(result)
+
+            if result.get("score_B", float("-inf")) > best_result.get("score_B", float("-inf")):
+                best_result = result
+
+            elapsed = time.time() - start_time
+            _print_progress(i, len(top_k_params), elapsed, best_result, args.show_eta)
+
+    print(f"\nStage 2 complete: Full A/B/C evaluation done on {len(results_topk)} candidates")
+    return results_topk
+
+
+def _run_single_stage(
+    args: argparse.Namespace,
+    grid: List[Dict[str, Any]],
+    df_paths: Dict[str, str],
+    num_workers: int,
+) -> List[Dict[str, Any]]:
+    """Single stage: Evaluate all candidates with A/B/C."""
     worker_inputs = [
         (args.config, args.strategy_id, params, df_paths) for params in grid
     ]
@@ -166,15 +285,20 @@ def main() -> None:
                 _print_progress(i, len(grid), elapsed, best_result, args.show_eta)
 
     print(f"\nEvaluated {len(results)} candidates")
+    return results
 
+
+def _save_results(
+    results: List[Dict[str, Any]],
+    args: argparse.Namespace,
+    out_dir: Path,
+) -> None:
+    """Save tuning results to CSV and JSON files."""
     df_results = pd.DataFrame([_flatten_result(r) for r in results])
     df_results = df_results.sort_values(
         by=["score_B", "expectancy_B", "max_drawdown_B"],
         ascending=[False, False, True],
     )
-
-    out_dir = Path(args.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
 
     csv_path = out_dir / "tuning_results.csv"
     json_path = out_dir / "tuning_results.json"
@@ -198,11 +322,12 @@ def main() -> None:
         json.dump(top_k_results, f, indent=2)
 
     best = results[0] if results else {}
-    print(f"\nBest result (Scenario B):")
+    print(f"\nBest result:")
     print(f"  Score: {best.get('score_B', 0.0):.4f}")
     print(f"  Params: {best.get('params', {})}")
 
     print(f"\nOutputs saved to: {out_dir.resolve()}")
+
 
 
 if __name__ == "__main__":
