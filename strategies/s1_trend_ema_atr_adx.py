@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Dict, Optional, Set
+from data.fx import PIP_SIZES
 
 import numpy as np
 
@@ -37,12 +38,19 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     ema_fast_col = _get_param(config, "ema_fast_col", "ema_fast")
     ema_slow_col = _get_param(config, "ema_slow_col", "ema_slow")
     adx_col = _get_param(config, "adx_col", "adx")
-    atr_col = _get_param(config, "atr_col", "atr")
+    atr_col = _get_param(config, "atr_col", "atr_pips")
 
     ema_fast = _read_value(cols[ema_fast_col], idx)
     ema_slow = _read_value(cols[ema_slow_col], idx)
     adx_value = _read_value(cols[adx_col], idx)
     atr_value = _read_value(cols[atr_col], idx)
+
+    if atr_value is None and atr_col == "atr_pips":
+        # fallback: convert from price-ATR to pips if only "atr" exists
+        atr_price = _read_value(cols.get("atr"), idx) if "atr" in cols else None
+        pip_size = PIP_SIZES.get(symbol, 0.0001)
+        atr_value = (atr_price / pip_size) if atr_price is not None else None
+
 
     tags: Dict[str, str] = {}
     side = Side.FLAT

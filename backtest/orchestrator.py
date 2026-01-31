@@ -86,8 +86,10 @@ def _prepare_features(
         for spec in strategies:
             df_local = _apply_strategy_features(df_local, spec)
 
-        if "atr" not in df_local:
-            df_local["atr"] = atr(df_local, 14)
+        pip_size = PIP_SIZES.get(symbol, 0.0001)
+        if "atr_pips" not in df_local:
+            df_local["atr_pips"] = df_local["atr"] / pip_size
+
 
         df_local["regime_snapshot"] = _compute_regime(
             df_local,

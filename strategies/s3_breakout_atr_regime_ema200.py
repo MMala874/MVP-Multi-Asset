@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Dict, Optional, Set
+from data.fx import PIP_SIZES
+
 
 import numpy as np
 
@@ -46,7 +48,7 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     high_col = _get_param(config, "high_col", "high")
     low_col = _get_param(config, "low_col", "low")
     close_col = _get_param(config, "close_col", "close")
-    atr_col = _get_param(config, "atr_col", "atr")
+    atr_col = _get_param(config, "atr_col", "atr_pips")
     ema200_col = _get_param(config, "ema200_col", "ema200")
     compression_z_col = _get_param(config, "compression_z_col", "compression_z")
     breakout_high_col = _get_param(config, "breakout_high_col", "breakout_high")
@@ -60,6 +62,12 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     lows = cols[low_col]
     atr_values = cols[atr_col]
     ema200_value = _read_value(cols[ema200_col], idx)
+
+    if atr_value is None and atr_col == "atr_pips":
+        # fallback: convert from price-ATR to pips if only "atr" exists
+        atr_price = _read_value(cols.get("atr"), idx) if "atr" in cols else None
+        pip_size = PIP_SIZES.get(symbol, 0.0001)
+        atr_value = (atr_price / pip_size) if atr_price is not None else None
 
     close_value = _read_value(closes, idx)
     atr_value = _read_value(atr_values, idx)

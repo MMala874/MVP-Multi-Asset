@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Dict, Optional, Set
+from data.fx import PIP_SIZES
+
 
 import numpy as np
 
@@ -36,7 +38,7 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     ema_slope_col = _get_param(config, "ema_slope_col", "ema_slope")
     adx_col = _get_param(config, "adx_col", "adx")
     mr_z_col = _get_param(config, "mr_z_col", "mr_z")
-    atr_col = _get_param(config, "atr_col", "atr")
+    atr_col = _get_param(config, "atr_col", "atr_pips")
 
     z_entry = float(_get_param(config, "z_entry", 2.0))
     adx_max = _get_param(config, "adx_max", 20.0)
@@ -48,6 +50,12 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     z_value = _read_value(cols[mr_z_col], idx)
     slope_value = _read_value(cols[ema_slope_col], idx)
     atr_value = _read_value(cols[atr_col], idx)
+
+    if atr_value is None and atr_col == "atr_pips":
+        # fallback: convert from price-ATR to pips if only "atr" exists
+        atr_price = _read_value(cols.get("atr"), idx) if "atr" in cols else None
+        pip_size = PIP_SIZES.get(symbol, 0.0001)
+        atr_value = (atr_price / pip_size) if atr_price is not None else None
 
     gate_pass = True
     if adx_value is None:
