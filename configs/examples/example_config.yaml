@@ -83,6 +83,6 @@ outputs:
   write_trades_csv: true
   write_report_json: true
   write_mc_json: true
-  debug: false
+  debug: true
 reproducibility:
   random_seed: 42
