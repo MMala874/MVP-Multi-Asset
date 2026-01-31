@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from configs.models import Config
+from data.fx import PIP_SIZES, to_price
 from execution.cost_model import CostModel
 from execution.fill_rules import get_fill_price
 from features.indicators import adx, atr, ema, slope
@@ -279,11 +280,15 @@ def _run_scenario(
                         df=df,
                         atr_series=df["atr"],
                     )[1]
+                    exit_price_raw = float(exit_price_raw)
                     exit_price_adj = _apply_cost(
-                        float(exit_price_raw),
+                        exit_price_raw,
                         exit_cost,
                         _opposite_side(position["current_side"]),
+                        symbol,
                     )
+                    assert exit_price_raw > 0
+                    assert exit_price_adj > 0
                     pnl = _calc_pnl(
                         position["current_side"],
                         float(position["qty"]),
@@ -381,7 +386,9 @@ def _run_scenario(
                     df=df,
                     atr_series=df["atr"],
                 )
-                entry_price_adj = _apply_cost(entry_price, entry_cost, order.side)
+                entry_price_adj = _apply_cost(entry_price, entry_cost, order.side, symbol)
+                assert entry_price > 0
+                assert entry_price_adj > 0
                 reason_codes = _encode_reason_codes(order.meta, filtered)
                 sl_price = None
                 tp_price = None
@@ -429,12 +436,18 @@ def _encode_reason_codes(meta: Dict[str, str], signals: Iterable[Any]) -> str:
     return ";".join(codes)
 
 
-def _apply_cost(price: float, cost: float, side: Side) -> float:
+def _apply_cost(price: float, cost: float, side: Side, symbol: str) -> float:
+    cost_price = to_price(symbol, cost)
     if side == Side.LONG:
-        return price + cost
-    if side == Side.SHORT:
-        return price - cost
-    return price
+        price_adj = price + cost_price
+    elif side == Side.SHORT:
+        price_adj = price - cost_price
+    else:
+        price_adj = price
+    if symbol in PIP_SIZES:
+        assert price_adj > 0
+        assert price > 0
+    return price_adj
 
 
 def _opposite_side(side: Side) -> Side:
@@ -454,10 +467,10 @@ def _calc_pnl(side: Side, qty: float, entry_price: float, exit_price: float) -> 
 
 
 def _resolve_time(df: pd.DataFrame, idx: int) -> datetime:
+    if "time" in df.columns:
+        return pd.to_datetime(df["time"].iat[idx]).to_pydatetime()
     if isinstance(df.index, pd.DatetimeIndex):
         return df.index[idx].to_pydatetime()
-    if "timestamp" in df.columns:
-        return pd.to_datetime(df["timestamp"].iat[idx]).to_pydatetime()
     return datetime.utcfromtimestamp(idx)
 
 
