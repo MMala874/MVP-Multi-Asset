@@ -29,6 +29,12 @@ TRADE_LOG_COLUMNS = [
     "scenario",
     "regime_snapshot",
     "reason_codes",
+    "exit_reason",
+    "sl_price",
+    "tp_price",
+    "gross_pips",
+    "cost_pips",
+    "pnl_pips",
 ]
 
 SCHEMA = TradeLogSchema(columns=list(TRADE_LOG_COLUMNS))

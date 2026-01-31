@@ -309,8 +309,18 @@ def _run_scenario(
                         elif tp_hit: exit_reason = "TP"
 
                     pip = PIP_SIZES.get(symbol, 0.0001)
-                    side_sign = 1 if position["current_side"] == Side.LONG else -1
-                    gross_pips = side_sign * (exit_price_raw - float(position["entry_price"])) / pip
+                    pip_size = PIP_SIZES.get(symbol, 0.0001)
+
+                    entry_raw = float(position["entry_price"])
+                    exit_raw = float(exit_price_raw)
+
+                    if position["current_side"] == Side.LONG:
+                        gross_pips = (exit_raw - entry_raw) / pip_size
+                    elif position["current_side"] == Side.SHORT:
+                        gross_pips = (entry_raw - exit_raw) / pip_size
+                    else:
+                        gross_pips = 0.0
+
                     cost_pips = float(position["spread_used"]) + 2*float(position["slippage_used"])
                     pnl_pips = gross_pips - cost_pips
 
