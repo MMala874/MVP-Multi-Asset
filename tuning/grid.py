@@ -4,56 +4,58 @@ from itertools import product
 from typing import Any, Dict, List, Literal
 
 
-def build_grid_s1(preset: Literal["small", "medium", "large"] = "medium") -> List[Dict[str, Any]]:
-    """Build grid search space for S1_TREND_EMA_ATR_ADX with preset sizes.
-    
-    Args:
-        preset: Grid size preset
-            - small: 1 × 1 × 3 × 2 × 1 × 1 × 1 = 6 combinations (minimal, fast)
-            - medium: 3 × 2 × 4 × 4 × 3 × 2 × 2 = 1,152 combinations (balanced)
-            - large: 5 × 3 × 5 × 5 × 4 × 3 × 3 = 13,500 combinations (comprehensive)
-    """
+def build_grid_s1(preset: Literal["small", "medium", "large"] = "medium"):
     if preset == "small":
-        ema_fast_vals = [20]
-        ema_slow_vals = [50]
-        adx_th_vals = [20, 25, 30]
-        k_sl_vals = [2.0, 2.5]
+        ema_fast_vals = [20, 30]
+        ema_slow_vals = [50, 100]
+
+        adx_period_vals = [14]
+        adx_th_vals = [20, 25]
+
+        atr_period_vals = [14]
+
+        k_sl_vals = [2.0, 3.0]
         k_tp_vals = [1.5]
-        min_sl_points_vals = [8.0]
-        min_tp_points_vals = [8.0]
+
+        min_sl_points_vals = [5.0]
+        min_tp_points_vals = [5.0]
+
     elif preset == "medium":
         ema_fast_vals = [10, 20, 30]
         ema_slow_vals = [50, 100]
-        adx_th_vals = [15, 20, 25, 30]
-        k_sl_vals = [1.5, 2.0, 2.5, 3.0]
-        k_tp_vals = [1.0, 1.5, 2.0]
-        min_sl_points_vals = [5.0, 8.0]
-        min_tp_points_vals = [5.0, 8.0]
-    elif preset == "large":
-        ema_fast_vals = [10, 15, 20, 25, 30]
-        ema_slow_vals = [50, 75, 100]
-        adx_th_vals = [15, 20, 25, 30, 35]
-        k_sl_vals = [1.5, 2.0, 2.5, 3.0, 3.5]
-        k_tp_vals = [1.0, 1.5, 2.0, 2.5]
-        min_sl_points_vals = [5.0, 6.5, 8.0]
-        min_tp_points_vals = [5.0, 6.5, 8.0]
-    else:
-        raise ValueError(f"Unknown preset: {preset}")
 
-    grid = [
+        adx_period_vals = [10, 14, 20]
+        adx_th_vals = [20, 25, 30]
+
+        atr_period_vals = [10, 14, 20]
+
+        k_sl_vals = [2.0, 3.0]
+        k_tp_vals = [1.0, 1.5, 2.0]
+
+        min_sl_points_vals = [5.0]
+        min_tp_points_vals = [5.0]
+
+    else:
+        raise ValueError("Large preset not recommended yet")
+
+    return [
         {
-            "ema_fast": ema_fast,
-            "ema_slow": ema_slow,
-            "adx_th": adx_th,
-            "k_sl": k_sl,
-            "k_tp": k_tp,
-            "min_sl_points": min_sl_points,
-            "min_tp_points": min_tp_points,
+            "ema_fast": ef,
+            "ema_slow": es,
+            "adx_period": ap,
+            "adx_th": ath,
+            "atr_period": atrp,
+            "k_sl": ksl,
+            "k_tp": ktp,
+            "min_sl_points": msl,
+            "min_tp_points": mtp,
         }
-        for ema_fast, ema_slow, adx_th, k_sl, k_tp, min_sl_points, min_tp_points in product(
+        for ef, es, ap, ath, atrp, ksl, ktp, msl, mtp in product(
             ema_fast_vals,
             ema_slow_vals,
+            adx_period_vals,
             adx_th_vals,
+            atr_period_vals,
             k_sl_vals,
             k_tp_vals,
             min_sl_points_vals,

@@ -1,0 +1,8 @@
+{
+  "limit_bars": null,
+  "grid_size": "small",
+  "workers": 7,
+  "two_stage": true,
+  "tune_scenario": "B",
+  "total_combinations": 16
+}
