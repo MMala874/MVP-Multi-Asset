@@ -2,137 +2,128 @@
   "metrics": {
     "by_regime": {
       "VOL=HIGH|SPIKE=0": {
-        "cvar_95": -1.520147352986665e-06,
-        "expectancy": -1.092980134608533e-06,
-        "max_drawdown": -0.00021648001195348005,
-        "max_loss_streak": 199.0,
-        "max_win_streak": 0.0,
-        "profit_factor": 0.0,
-        "trades": 199.0
+        "cvar_95": -2.5286289870537275e-07,
+        "expectancy": -2.0381830746627265e-08,
+        "max_drawdown": -0.0004199019596175067,
+        "max_loss_streak": 10.0,
+        "max_win_streak": 17.0,
+        "profit_factor": 0.7588156185723941,
+        "trades": 20533.0
       },
       "VOL=HIGH|SPIKE=1": {
-        "cvar_95": -4.073560666842931e-06,
-        "expectancy": -1.4647588465106975e-06,
-        "max_drawdown": -1.5062746010338037e-05,
-        "max_loss_streak": 11.0,
-        "max_win_streak": 0.0,
-        "profit_factor": 0.0,
-        "trades": 11.0
+        "cvar_95": -2.7356389809433906e-07,
+        "expectancy": -5.4127358006026e-08,
+        "max_drawdown": -5.6597525590840314e-05,
+        "max_loss_streak": 6.0,
+        "max_win_streak": 9.0,
+        "profit_factor": 0.49526637056472633,
+        "trades": 1031.0
       },
       "VOL=LOW|SPIKE=0": {
-        "cvar_95": -1.5560697361259292e-06,
-        "expectancy": -1.1177732885692396e-06,
-        "max_drawdown": -0.00010850054400790969,
-        "max_loss_streak": 98.0,
-        "max_win_streak": 0.0,
-        "profit_factor": 0.0,
-        "trades": 98.0
+        "cvar_95": -3.0578277813439977e-07,
+        "expectancy": -6.528160658394442e-08,
+        "max_drawdown": -0.0010137063599380326,
+        "max_loss_streak": 11.0,
+        "max_win_streak": 13.0,
+        "profit_factor": 0.43043495121545244,
+        "trades": 15515.0
       },
       "VOL=LOW|SPIKE=1": {
-        "cvar_95": -1.068005568648197e-06,
-        "expectancy": -1.045951707451606e-06,
-        "max_drawdown": -1.0238978462550152e-06,
-        "max_loss_streak": 2.0,
-        "max_win_streak": 0.0,
-        "profit_factor": 0.0,
-        "trades": 2.0
+        "cvar_95": -3.075861185515777e-07,
+        "expectancy": -3.0759507374825834e-08,
+        "max_drawdown": -1.4395760180423946e-05,
+        "max_loss_streak": 8.0,
+        "max_win_streak": 10.0,
+        "profit_factor": 0.6663405094350409,
+        "trades": 441.0
       },
       "VOL=MID|SPIKE=0": {
-        "cvar_95": -1.6657560494460847e-06,
-        "expectancy": 5.926145799782567e-07,
-        "max_drawdown": -9.843126813991317e-05,
-        "max_loss_streak": 82.0,
-        "max_win_streak": 1.0,
-        "profit_factor": 1.5367977728788282,
-        "trades": 195.0
+        "cvar_95": -2.823208313662317e-07,
+        "expectancy": -4.619530444996532e-08,
+        "max_drawdown": -0.0010706065001728523,
+        "max_loss_streak": 12.0,
+        "max_win_streak": 17.0,
+        "profit_factor": 0.5419109963885329,
+        "trades": 23160.0
       },
       "VOL=MID|SPIKE=1": {
-        "cvar_95": -1.2636537974692724e-06,
-        "expectancy": -1.1105309658601312e-06,
-        "max_drawdown": -6.745954230872286e-06,
-        "max_loss_streak": 7.0,
-        "max_win_streak": 0.0,
-        "profit_factor": 0.0,
-        "trades": 7.0
+        "cvar_95": -3.0569583823907593e-07,
+        "expectancy": -4.0186528493096144e-08,
+        "max_drawdown": -2.920058451114284e-05,
+        "max_loss_streak": 10.0,
+        "max_win_streak": 10.0,
+        "profit_factor": 0.5871257580530637,
+        "trades": 698.0
       },
       "VOL=UNKNOWN|SPIKE=0": {
-        "cvar_95": -1.179175613291446e-06,
-        "expectancy": -1.0518872568184528e-06,
-        "max_drawdown": -3.053190269381294e-05,
-        "max_loss_streak": 30.0,
-        "max_win_streak": 0.0,
-        "profit_factor": 0.0,
-        "trades": 30.0
-      },
-      "VOL=UNKNOWN|SPIKE=1": {
-        "cvar_95": -1.3331491140562382e-06,
-        "expectancy": -1.1785162655511767e-06,
-        "max_drawdown": -2.429563588312984e-06,
-        "max_loss_streak": 3.0,
-        "max_win_streak": 0.0,
-        "profit_factor": 0.0,
-        "trades": 3.0
+        "cvar_95": -2.242140595748361e-07,
+        "expectancy": -4.28737343619974e-08,
+        "max_drawdown": -4.636560370982078e-06,
+        "max_loss_streak": 4.0,
+        "max_win_streak": 5.0,
+        "profit_factor": 0.5746855477850837,
+        "trades": 111.0
       }
     },
     "by_scenario": {
       "A": {
-        "cvar_95": -1.1051540862184967e-06,
-        "expectancy": -4.962810201631151e-07,
-        "max_drawdown": -0.00013379273738286983,
-        "max_loss_streak": 129.0,
-        "max_win_streak": 1.0,
-        "profit_factor": 0.5214526645048617,
-        "trades": 130.0
+        "cvar_95": -2.3758947885239642e-07,
+        "expectancy": -2.7728618243034753e-08,
+        "max_drawdown": -0.0005700056955518343,
+        "max_loss_streak": 13.0,
+        "max_win_streak": 14.0,
+        "profit_factor": 0.6949171037402954,
+        "trades": 20561.0
       },
       "B": {
-        "cvar_95": -1.2054146976414595e-06,
-        "expectancy": -5.109618362841633e-07,
-        "max_drawdown": -0.00019756652027304834,
-        "max_loss_streak": 186.0,
-        "max_win_streak": 1.0,
-        "profit_factor": 0.5188803480399085,
-        "trades": 187.0
+        "cvar_95": -2.452139529687003e-07,
+        "expectancy": -3.561015317145246e-08,
+        "max_drawdown": -0.0007297322118987828,
+        "max_loss_streak": 11.0,
+        "max_win_streak": 14.0,
+        "profit_factor": 0.6262231659882145,
+        "trades": 20496.0
       },
       "C": {
-        "cvar_95": -1.993998480893108e-06,
-        "expectancy": -4.933715962874077e-07,
-        "max_drawdown": -0.00026889923806196875,
-        "max_loss_streak": 227.0,
-        "max_win_streak": 1.0,
-        "profit_factor": 0.5833362967640736,
-        "trades": 228.0
+        "cvar_95": -3.22341574026036e-07,
+        "expectancy": -6.379273292351894e-08,
+        "max_drawdown": -0.0013032146752277706,
+        "max_loss_streak": 14.0,
+        "max_win_streak": 17.0,
+        "profit_factor": 0.4227332880538503,
+        "trades": 20432.0
       }
     },
     "by_strategy": {
       "s1_trend_ema_atr_adx": {
-        "cvar_95": -1.680609894312936e-06,
-        "expectancy": -5.001011375410503e-07,
-        "max_drawdown": -0.0004290165386083738,
-        "max_loss_streak": 227.0,
-        "max_win_streak": 1.0,
-        "profit_factor": 0.5482945599463258,
-        "trades": 545.0
+        "cvar_95": -2.820859826638216e-07,
+        "expectancy": -4.233939303274514e-08,
+        "max_drawdown": -0.0026032845140472674,
+        "max_loss_streak": 14.0,
+        "max_win_streak": 17.0,
+        "profit_factor": 0.5717620662564099,
+        "trades": 61489.0
       }
     },
     "by_symbol": {
       "EURUSD": {
-        "cvar_95": -1.680609894312936e-06,
-        "expectancy": -5.001011375410503e-07,
-        "max_drawdown": -0.0004290165386083738,
-        "max_loss_streak": 227.0,
-        "max_win_streak": 1.0,
-        "profit_factor": 0.5482945599463258,
-        "trades": 545.0
+        "cvar_95": -2.820859826638216e-07,
+        "expectancy": -4.233939303274514e-08,
+        "max_drawdown": -0.0026032845140472674,
+        "max_loss_streak": 14.0,
+        "max_win_streak": 17.0,
+        "profit_factor": 0.5717620662564099,
+        "trades": 61489.0
       }
     },
     "overall": {
-      "cvar_95": -1.680609894312936e-06,
-      "expectancy": -5.001011375410503e-07,
-      "max_drawdown": -0.0004290165386083738,
-      "max_loss_streak": 227.0,
-      "max_win_streak": 1.0,
-      "profit_factor": 0.5482945599463258,
-      "trades": 545.0
+      "cvar_95": -2.820859826638216e-07,
+      "expectancy": -4.233939303274514e-08,
+      "max_drawdown": -0.0026032845140472674,
+      "max_loss_streak": 14.0,
+      "max_win_streak": 17.0,
+      "profit_factor": 0.5717620662564099,
+      "trades": 61489.0
     }
   },
   "summary": {
@@ -147,6 +138,6 @@
     "symbols": [
       "EURUSD"
     ],
-    "total_trades": 545
+    "total_trades": 61489
   }
 }

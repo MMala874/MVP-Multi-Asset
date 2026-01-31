@@ -17,14 +17,17 @@ regime:
 strategies:
   enabled:
     - S1_TREND_EMA_ATR_ADX
-    - S2_MR_ZSCORE_EMA_REGIME
   params:
     S1_TREND_EMA_ATR_ADX:
       ema_fast: 20
       ema_slow: 50
+      adx_period: 14
+      adx_th: 25
       atr_period: 14
-      k_sl: 2.0
-      min_sl_points: 5.0
+      k_sl: 2.5
+      min_sl_points: 8.0
+      k_tp: 1.5
+      min_tp_points: 8.0
     S2_MR_ZSCORE_EMA_REGIME:
       zscore_window: 30
       ema_regime: 200
@@ -36,7 +39,8 @@ strategies:
       k_sl: 2.0
       min_sl_points: 5.0
 risk:
-  r_base: 0.01
+  max_hold_bars: 96
+  r_base: 0.002
   caps:
     per_strategy: 0.03
     per_symbol: 0.05
@@ -44,8 +48,6 @@ risk:
   conflict_policy: priority
   priority_order:
     - S1_TREND_EMA_ATR_ADX
-    - S2_MR_ZSCORE_EMA_REGIME
-    - S3_BREAKOUT_ATR_REGIME_EMA200
   dd_day_limit: 0.02
   dd_week_limit: 0.05
   max_execution_errors: 3
