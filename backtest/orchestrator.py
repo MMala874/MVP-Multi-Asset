@@ -24,6 +24,7 @@ from desk_types import Scenario, Side
 STRATEGY_MAP = {
     "S1_TREND_EMA_ATR_ADX": "strategies.s1_trend_ema_atr_adx",
     "S1_TREND_BREAKOUT_DONCHIAN": "strategies.s1_trend_breakout_donchian",
+    "S1_TREND_BREAKOUT_RETEST": "strategies.s1_trend_breakout_retest",
     "S2_MR_ZSCORE_EMA_REGIME": "strategies.s2_mr_zscore_ema_regime",
     "S3_BREAKOUT_ATR_REGIME_EMA200": "strategies.s3_breakout_atr_regime_ema200",
 }
@@ -146,6 +147,31 @@ def _apply_strategy_features(df: pd.DataFrame, spec: _StrategySpec) -> pd.DataFr
         if "adx" not in df:
             df["adx"] = adx(df, adx_period)
     elif spec.name == "S1_TREND_BREAKOUT_DONCHIAN":
+        ema_fast = int(spec.params.get("ema_fast", 20))
+        ema_slow = int(spec.params.get("ema_slow", 50))
+        atr_period = int(spec.params.get("atr_period", 14))
+        adx_period = int(spec.params.get("adx_period", 14))
+        breakout_lookback = int(spec.params.get("breakout_lookback", 20))
+        
+        if "ema_fast" not in df:
+            df["ema_fast"] = ema(df["close"], ema_fast)
+        if "ema_slow" not in df:
+            df["ema_slow"] = ema(df["close"], ema_slow)
+        if "atr" not in df:
+            df["atr"] = atr(df, atr_period)
+        if "adx" not in df:
+            df["adx"] = adx(df, adx_period)
+        
+        # Donchian breakout levels (no lookahead: shift(1))
+        if "breakout_hh" not in df:
+            df["breakout_hh"] = (
+                df["high"].shift(1).rolling(window=breakout_lookback, min_periods=breakout_lookback).max()
+            )
+        if "breakout_ll" not in df:
+            df["breakout_ll"] = (
+                df["low"].shift(1).rolling(window=breakout_lookback, min_periods=breakout_lookback).min()
+            )
+    elif spec.name == "S1_TREND_BREAKOUT_RETEST":
         ema_fast = int(spec.params.get("ema_fast", 20))
         ema_slow = int(spec.params.get("ema_slow", 50))
         atr_period = int(spec.params.get("atr_period", 14))
