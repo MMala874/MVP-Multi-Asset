@@ -1,0 +1,52 @@
+universe:
+  symbols:
+    - EURUSD
+  timeframe: M15
+
+bar_contract:
+  signal_on: close
+  fill_on: open_next
+  allow_bar0: false
+
+regime:
+  atr_pct_window: 960
+  atr_pct_n: 14
+  z_low: -0.5
+  z_high: 0.5
+  spike_tr_atr_th: 2.5
+
+strategies:
+  enabled:
+    - S1_TREND_BREAKOUT_DONCHIAN
+  params:
+    S1_TREND_BREAKOUT_DONCHIAN:
+      ema_fast: 20
+      ema_slow: 50
+      atr_period: 14
+      adx_period: 14
+      adx_th: 25.0
+      adx_rising: false
+      breakout_lookback: 20
+      buffer_atr: 0.1
+      allowed_vol_regimes: ["MID", "HIGH"]
+      spike_block: false
+      cooldown_bars: 0
+      k_sl: 2.5
+      min_sl_points: 8.0
+      k_tp: 1.5
+      min_tp_points: 8.0
+
+costs:
+  spread_pips: 2.0
+  slippage_pct_of_spread: 0.5
+
+risk:
+  max_position_usd: 100000
+  max_notional_exposure_usd: 200000
+  max_risk_pct_of_capital: 2.0
+  scale_risk_by_vol: true
+
+outputs:
+  debug: false
+  export_csv: true
+  csv_dir: "runs/"
