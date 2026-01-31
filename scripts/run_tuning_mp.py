@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from multiprocessing import Pool, cpu_count
+from pathlib import Path
+from typing import Any, Dict, List
+
+import pandas as pd
+
+from tuning.grid import build_grid
+from tuning.worker import run_worker
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Multiprocessing grid search tuning for single strategy."
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="configs/examples/example_config.yaml",
+        help="Path to YAML config file.",
+    )
+    parser.add_argument(
+        "--strategy_id",
+        type=str,
+        default="S1_TREND_EMA_ATR_ADX",
+        help="Strategy ID to tune.",
+    )
+    parser.add_argument("--eurusd", type=str, help="Path to EURUSD OHLC CSV.")
+    parser.add_argument("--gbpusd", type=str, help="Path to GBPUSD OHLC CSV.")
+    parser.add_argument("--usdjpy", type=str, help="Path to USDJPY OHLC CSV.")
+    parser.add_argument(
+        "--out", type=str, default="runs_tuning/", help="Output directory."
+    )
+    parser.add_argument(
+        "--top_k", type=int, default=10, help="Number of top results to save."
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Number of workers (default: cpu_count-1, max 7).",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        default=True,
+        help="Overwrite output files.",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=None, help="Random seed (from config if not set)."
+    )
+
+    args = parser.parse_args()
+
+    if not any([args.eurusd, args.gbpusd, args.usdjpy]):
+        parser.error("At least one symbol CSV required (--eurusd, --gbpusd, --usdjpy).")
+
+    return args
+
+
+def _get_worker_count() -> int:
+    """Get safe worker count: cpu_count-1, capped at 7."""
+    count = max(1, cpu_count() - 1)
+    return min(count, 7)
+
+
+def _flatten_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Flatten result dict for CSV export."""
+    row = {}
+    params = result.get("params", {})
+    row.update(params)
+    for key in result:
+        if key != "params":
+            row[key] = result[key]
+    return row
+
+
+def main() -> None:
+    args = _parse_args()
+
+    df_paths = {
+        "EURUSD": args.eurusd,
+        "GBPUSD": args.gbpusd,
+        "USDJPY": args.usdjpy,
+    }
+
+    grid = build_grid(args.strategy_id)
+    print(f"Grid size: {len(grid)} combinations")
+
+    num_workers = args.workers if args.workers else _get_worker_count()
+    print(f"Using {num_workers} workers")
+
+    worker_inputs = [
+        (args.config, args.strategy_id, params, df_paths) for params in grid
+    ]
+
+    results: List[Dict[str, Any]] = []
+    with Pool(processes=num_workers) as pool:
+        results = pool.starmap(run_worker, worker_inputs)
+
+    print(f"Evaluated {len(results)} candidates")
+
+    df_results = pd.DataFrame([_flatten_result(r) for r in results])
+    df_results = df_results.sort_values(
+        by=["score_B", "expectancy_B", "max_drawdown_B"],
+        ascending=[False, False, True],
+    )
+
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    csv_path = out_dir / "tuning_results.csv"
+    json_path = out_dir / "tuning_results.json"
+    top_k_csv = out_dir / "top_k.csv"
+    top_k_json = out_dir / "top_k.json"
+
+    for path in [csv_path, json_path, top_k_csv, top_k_json]:
+        if path.exists():
+            path.unlink()
+
+    df_results.to_csv(csv_path, index=False)
+
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2)
+
+    top_k_results = results[: args.top_k]
+    df_top_k = pd.DataFrame([_flatten_result(r) for r in top_k_results])
+    df_top_k.to_csv(top_k_csv, index=False)
+
+    with open(top_k_json, "w", encoding="utf-8") as f:
+        json.dump(top_k_results, f, indent=2)
+
+    best = results[0] if results else {}
+    print(f"\nBest result (Scenario B):")
+    print(f"  Score: {best.get('score_B', 0.0):.4f}")
+    print(f"  Params: {best.get('params', {})}")
+
+    print(f"\nOutputs saved to: {out_dir.resolve()}")
+
+
+if __name__ == "__main__":
+    main()
