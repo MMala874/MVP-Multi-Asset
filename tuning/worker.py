@@ -45,6 +45,7 @@ def run_worker_single_scenario(
     cfg_copy = copy.deepcopy(cfg)
     cfg_copy.strategies.enabled = [strategy_id]
     cfg_copy.strategies.params[strategy_id] = param_set
+    cfg_copy.outputs.debug = False  # Silence debug output during tuning
 
     orchestrator = BacktestOrchestrator()
     trades, report = orchestrator.run(df_by_symbol, cfg_copy)
@@ -105,6 +106,7 @@ def run_worker_full_scenarios(
     cfg_copy = copy.deepcopy(cfg)
     cfg_copy.strategies.enabled = [strategy_id]
     cfg_copy.strategies.params[strategy_id] = param_set
+    cfg_copy.outputs.debug = False  # Silence debug output during tuning
 
     orchestrator = BacktestOrchestrator()
     trades, report = orchestrator.run(df_by_symbol, cfg_copy)
@@ -169,6 +171,7 @@ def run_worker(
     cfg_copy = copy.deepcopy(cfg)
     cfg_copy.strategies.enabled = [strategy_id]
     cfg_copy.strategies.params[strategy_id] = param_set
+    cfg_copy.outputs.debug = False  # Silence debug output during tuning
 
     orchestrator = BacktestOrchestrator()
     trades, report = orchestrator.run(df_by_symbol, cfg_copy)

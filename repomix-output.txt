@@ -1775,130 +1775,6 @@ from __future__ import annotations
 __all__ = ["grid", "worker"]
 
 ================
-File: tuning/grid.py
-================
-from __future__ import annotations
-
-from itertools import product
-from typing import Any, Dict, List
-
-
-def build_grid_s1() -> List[Dict[str, Any]]:
-    """Build grid search space for S1_TREND_EMA_ATR_ADX."""
-    ema_fast_vals = [10, 20, 30]
-    ema_slow_vals = [50, 100]
-    adx_th_vals = [15, 20, 25, 30]
-    k_sl_vals = [1.5, 2.0, 2.5, 3.0]
-    k_tp_vals = [1.0, 1.5, 2.0]
-    min_sl_points_vals = [5.0, 8.0]
-    min_tp_points_vals = [5.0, 8.0]
-
-    grid = [
-        {
-            "ema_fast": ema_fast,
-            "ema_slow": ema_slow,
-            "adx_th": adx_th,
-            "k_sl": k_sl,
-            "k_tp": k_tp,
-            "min_sl_points": min_sl_points,
-            "min_tp_points": min_tp_points,
-        }
-        for ema_fast, ema_slow, adx_th, k_sl, k_tp, min_sl_points, min_tp_points in product(
-            ema_fast_vals,
-            ema_slow_vals,
-            adx_th_vals,
-            k_sl_vals,
-            k_tp_vals,
-            min_sl_points_vals,
-            min_tp_points_vals,
-        )
-    ]
-    return grid
-
-
-def build_grid(strategy_id: str) -> List[Dict[str, Any]]:
-    """Build grid for given strategy."""
-    if strategy_id == "S1_TREND_EMA_ATR_ADX":
-        return build_grid_s1()
-    raise ValueError(f"Grid not defined for strategy: {strategy_id}")
-
-================
-File: tuning/worker.py
-================
-from __future__ import annotations
-
-import copy
-from typing import Any, Dict
-
-import pandas as pd
-
-from backtest.orchestrator import BacktestOrchestrator
-from configs.loader import load_config
-from data.io import load_ohlc_csv
-
-
-def run_worker(
-    config_path: str,
-    strategy_id: str,
-    param_set: Dict[str, Any],
-    df_paths: Dict[str, str],
-) -> Dict[str, Any]:
-    """Worker function: evaluate one parameter set across all scenarios.
-    
-    Args:
-        config_path: Path to YAML config
-        strategy_id: Strategy to tune
-        param_set: Parameter combination to test
-        df_paths: Dict mapping symbol -> CSV path
-    
-    Returns:
-        Dict with params and metrics for all scenarios.
-    """
-    cfg = load_config(config_path)
-
-    df_by_symbol: Dict[str, pd.DataFrame] = {}
-    for symbol, path in df_paths.items():
-        if path:
-            df_by_symbol[symbol] = load_ohlc_csv(path)
-
-    cfg_copy = copy.deepcopy(cfg)
-    cfg_copy.strategies.enabled = [strategy_id]
-    cfg_copy.strategies.params[strategy_id] = param_set
-
-    orchestrator = BacktestOrchestrator()
-    trades, report = orchestrator.run(df_by_symbol, cfg_copy)
-
-    metrics_by_scenario = report.get("metrics", {}).get("by_scenario", {})
-
-    result = {"params": param_set}
-
-    for scenario in ["A", "B", "C"]:
-        scenario_metrics = metrics_by_scenario.get(scenario, {})
-        trades_count = int(scenario_metrics.get("trades", 0))
-        expectancy = float(scenario_metrics.get("expectancy", 0.0))
-        pf = float(scenario_metrics.get("profit_factor", 0.0))
-        max_dd = float(scenario_metrics.get("max_drawdown", 0.0))
-
-        result[f"trades_{scenario}"] = trades_count
-        result[f"expectancy_{scenario}"] = expectancy
-        result[f"pf_{scenario}"] = pf
-        result[f"max_drawdown_{scenario}"] = max_dd
-
-    trades_b = result.get("trades_B", 0)
-    pf_b = result.get("pf_B", 0.0)
-    expectancy_b = result.get("expectancy_B", 0.0)
-    max_dd_b = result.get("max_drawdown_B", 0.0)
-
-    score = pf_b
-    if trades_b < 300:
-        score *= 0.25
-
-    result["score_B"] = score
-    result["trades_B_raw"] = trades_b
-
-    return result
-
-================
 File: validation/__init__.py
 ================
 from validation.filter_tuner import FilterTuner, ScoreWeights
@@ -2735,219 +2611,6 @@ if __name__ == "__main__":
     main()
 
 ================
-File: scripts/run_tuning_mp.py
-================
-#!/usr/bin/env python3
-from __future__ import annotations
-
-import argparse
-import json
-import os
-import time
-from multiprocessing import Pool, cpu_count
-from pathlib import Path
-from typing import Any, Dict, List
-
-import pandas as pd
-
-from tuning.grid import build_grid
-from tuning.worker import run_worker
-
-
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Multiprocessing grid search tuning for single strategy."
-    )
-    parser.add_argument(
-        "--config",
-        type=str,
-        default="configs/examples/example_config.yaml",
-        help="Path to YAML config file.",
-    )
-    parser.add_argument(
-        "--strategy_id",
-        type=str,
-        default="S1_TREND_EMA_ATR_ADX",
-        help="Strategy ID to tune.",
-    )
-    parser.add_argument("--eurusd", type=str, help="Path to EURUSD OHLC CSV.")
-    parser.add_argument("--gbpusd", type=str, help="Path to GBPUSD OHLC CSV.")
-    parser.add_argument("--usdjpy", type=str, help="Path to USDJPY OHLC CSV.")
-    parser.add_argument(
-        "--out", type=str, default="runs_tuning/", help="Output directory."
-    )
-    parser.add_argument(
-        "--top_k", type=int, default=10, help="Number of top results to save."
-    )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        default=None,
-        help="Number of workers (default: cpu_count-1, max 7).",
-    )
-    parser.add_argument(
-        "--overwrite",
-        action="store_true",
-        default=True,
-        help="Overwrite output files.",
-    )
-    parser.add_argument(
-        "--seed", type=int, default=None, help="Random seed (from config if not set)."
-    )
-    parser.add_argument(
-        "--progress_every",
-        type=int,
-        default=50,
-        help="Print progress every N results.",
-    )
-    parser.add_argument(
-        "--show_eta",
-        action="store_true",
-        default=True,
-        help="Show estimated time of arrival.",
-    )
-
-    args = parser.parse_args()
-
-    if not any([args.eurusd, args.gbpusd, args.usdjpy]):
-        parser.error("At least one symbol CSV required (--eurusd, --gbpusd, --usdjpy).")
-
-    return args
-
-
-def _get_worker_count() -> int:
-    """Get safe worker count: cpu_count-1, capped at 7."""
-    count = max(1, cpu_count() - 1)
-    return min(count, 7)
-
-
-def _format_time(seconds: float) -> str:
-    """Format seconds as HH:MM:SS."""
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = int(seconds % 60)
-    return f"{h:02d}:{m:02d}:{s:02d}"
-
-
-def _print_progress(
-    completed: int,
-    total: int,
-    elapsed: float,
-    best_result: Dict[str, Any],
-    show_eta: bool,
-) -> None:
-    """Print progress line with ETA."""
-    pct = (completed / total) * 100.0 if total > 0 else 0.0
-
-    if show_eta and completed > 0:
-        avg_time = elapsed / completed
-        eta_seconds = avg_time * (total - completed)
-        eta_str = _format_time(eta_seconds)
-    else:
-        eta_str = "N/A"
-
-    elapsed_str = _format_time(elapsed)
-    best_score = best_result.get("score_B", 0.0)
-    best_pf = best_result.get("pf_B", 0.0)
-    best_exp = best_result.get("expectancy_B", 0.0)
-
-    print(
-        f"[tuning] {completed}/{total} ({pct:.1f}%) "
-        f"elapsed={elapsed_str} eta={eta_str} "
-        f"best_score={best_score:.4f} best_pf_B={best_pf:.4f} best_exp_B={best_exp:.6f}"
-    )
-
-
-
-def _flatten_result(result: Dict[str, Any]) -> Dict[str, Any]:
-    """Flatten result dict for CSV export."""
-    row = {}
-    params = result.get("params", {})
-    row.update(params)
-    for key in result:
-        if key != "params":
-            row[key] = result[key]
-    return row
-
-
-def main() -> None:
-    args = _parse_args()
-
-    df_paths = {
-        "EURUSD": args.eurusd,
-        "GBPUSD": args.gbpusd,
-        "USDJPY": args.usdjpy,
-    }
-
-    grid = build_grid(args.strategy_id)
-    print(f"Grid size: {len(grid)} combinations")
-
-    num_workers = args.workers if args.workers else _get_worker_count()
-    print(f"Using {num_workers} workers")
-
-    worker_inputs = [
-        (args.config, args.strategy_id, params, df_paths) for params in grid
-    ]
-
-    results: List[Dict[str, Any]] = []
-    best_result: Dict[str, Any] = {}
-    start_time = time.time()
-
-    with Pool(processes=num_workers) as pool:
-        for i, result in enumerate(pool.imap_unordered(run_worker, worker_inputs), 1):
-            results.append(result)
-
-            if result.get("score_B", float("-inf")) > best_result.get("score_B", float("-inf")):
-                best_result = result
-
-            if i % args.progress_every == 0 or i == len(grid):
-                elapsed = time.time() - start_time
-                _print_progress(i, len(grid), elapsed, best_result, args.show_eta)
-
-    print(f"\nEvaluated {len(results)} candidates")
-
-    df_results = pd.DataFrame([_flatten_result(r) for r in results])
-    df_results = df_results.sort_values(
-        by=["score_B", "expectancy_B", "max_drawdown_B"],
-        ascending=[False, False, True],
-    )
-
-    out_dir = Path(args.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    csv_path = out_dir / "tuning_results.csv"
-    json_path = out_dir / "tuning_results.json"
-    top_k_csv = out_dir / "top_k.csv"
-    top_k_json = out_dir / "top_k.json"
-
-    for path in [csv_path, json_path, top_k_csv, top_k_json]:
-        if path.exists():
-            path.unlink()
-
-    df_results.to_csv(csv_path, index=False)
-
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2)
-
-    top_k_results = results[: args.top_k]
-    df_top_k = pd.DataFrame([_flatten_result(r) for r in top_k_results])
-    df_top_k.to_csv(top_k_csv, index=False)
-
-    with open(top_k_json, "w", encoding="utf-8") as f:
-        json.dump(top_k_results, f, indent=2)
-
-    best = results[0] if results else {}
-    print(f"\nBest result (Scenario B):")
-    print(f"  Score: {best.get('score_B', 0.0):.4f}")
-    print(f"  Params: {best.get('params', {})}")
-
-    print(f"\nOutputs saved to: {out_dir.resolve()}")
-
-
-if __name__ == "__main__":
-    main()
-
-================
 File: scripts/run_tuning.py
 ================
 #!/usr/bin/env python3
@@ -3351,104 +3014,6 @@ def test_run_backtest_cli_creates_outputs(tmp_path: Path) -> None:
     assert report_data
 
 ================
-File: tests/test_run_tuning_mp.py
-================
-from __future__ import annotations
-
-import pandas as pd
-import tempfile
-from pathlib import Path
-
-from tuning.grid import build_grid
-from tuning.worker import run_worker
-
-
-def test_grid_s1_size() -> None:
-    """Test that grid for S1 has correct size."""
-    grid = build_grid("S1_TREND_EMA_ATR_ADX")
-    expected_size = 3 * 2 * 4 * 4 * 3 * 2 * 2
-    assert len(grid) == expected_size, f"Expected {expected_size}, got {len(grid)}"
-
-
-def test_grid_s1_keys() -> None:
-    """Test that all grid entries have required keys."""
-    grid = build_grid("S1_TREND_EMA_ATR_ADX")
-    required_keys = {
-        "ema_fast",
-        "ema_slow",
-        "adx_th",
-        "k_sl",
-        "k_tp",
-        "min_sl_points",
-        "min_tp_points",
-    }
-    for params in grid:
-        assert set(params.keys()) == required_keys
-
-
-def test_worker_output_structure() -> None:
-    """Test worker function output for one parameter set."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        eurusd_data = {
-            "time": pd.date_range("2024-01-01", periods=100, freq="1h"),
-            "open": [1.0 + i * 0.0001 for i in range(100)],
-            "high": [1.01 + i * 0.0001 for i in range(100)],
-            "low": [0.99 + i * 0.0001 for i in range(100)],
-            "close": [1.005 + i * 0.0001 for i in range(100)],
-        }
-        eurusd_df = pd.DataFrame(eurusd_data)
-        eurusd_csv = Path(tmpdir) / "eurusd.csv"
-        eurusd_df.to_csv(eurusd_csv, index=False)
-
-        params = {
-            "ema_fast": 20,
-            "ema_slow": 50,
-            "adx_th": 20,
-            "k_sl": 1.5,
-            "k_tp": 1.0,
-            "min_sl_points": 5.0,
-            "min_tp_points": 5.0,
-        }
-
-        df_paths = {
-            "EURUSD": str(eurusd_csv),
-            "GBPUSD": None,
-            "USDJPY": None,
-        }
-
-        result = run_worker(
-            "configs/examples/example_config.yaml",
-            "S1_TREND_EMA_ATR_ADX",
-            params,
-            df_paths,
-        )
-
-        expected_keys = {
-            "params",
-            "trades_A",
-            "trades_B",
-            "trades_C",
-            "expectancy_A",
-            "expectancy_B",
-            "expectancy_C",
-            "pf_A",
-            "pf_B",
-            "pf_C",
-            "max_drawdown_A",
-            "max_drawdown_B",
-            "max_drawdown_C",
-            "score_B",
-            "trades_B_raw",
-        }
-        assert set(result.keys()) == expected_keys, f"Missing keys: {expected_keys - set(result.keys())}"
-
-        assert isinstance(result["score_B"], (int, float))
-        assert isinstance(result["trades_A"], int)
-        assert isinstance(result["expectancy_B"], float)
-        assert isinstance(result["pf_B"], float)
-        assert isinstance(result["max_drawdown_B"], float)
-
-================
 File: tests/test_run_tuning.py
 ================
 from __future__ import annotations
@@ -3802,6 +3367,85 @@ def test_val_thresholds_ignore_test_data() -> None:
     filtered_low = _apply_filters("S3_BREAKOUT_ATR_REGIME_EMA200", params, df_low, train_idx, val_idx)
 
     assert list(filtered_high.index) == list(filtered_low.index)
+
+================
+File: tuning/grid.py
+================
+from __future__ import annotations
+
+from itertools import product
+from typing import Any, Dict, List, Literal
+
+
+def build_grid_s1(preset: Literal["small", "medium", "large"] = "medium") -> List[Dict[str, Any]]:
+    """Build grid search space for S1_TREND_EMA_ATR_ADX with preset sizes.
+    
+    Args:
+        preset: Grid size preset
+            - small: 1 × 1 × 3 × 2 × 1 × 1 × 1 = 6 combinations (minimal, fast)
+            - medium: 3 × 2 × 4 × 4 × 3 × 2 × 2 = 1,152 combinations (balanced)
+            - large: 5 × 3 × 5 × 5 × 4 × 3 × 3 = 13,500 combinations (comprehensive)
+    """
+    if preset == "small":
+        ema_fast_vals = [20]
+        ema_slow_vals = [50]
+        adx_th_vals = [20, 25, 30]
+        k_sl_vals = [2.0, 2.5]
+        k_tp_vals = [1.5]
+        min_sl_points_vals = [8.0]
+        min_tp_points_vals = [8.0]
+    elif preset == "medium":
+        ema_fast_vals = [10, 20, 30]
+        ema_slow_vals = [50, 100]
+        adx_th_vals = [15, 20, 25, 30]
+        k_sl_vals = [1.5, 2.0, 2.5, 3.0]
+        k_tp_vals = [1.0, 1.5, 2.0]
+        min_sl_points_vals = [5.0, 8.0]
+        min_tp_points_vals = [5.0, 8.0]
+    elif preset == "large":
+        ema_fast_vals = [10, 15, 20, 25, 30]
+        ema_slow_vals = [50, 75, 100]
+        adx_th_vals = [15, 20, 25, 30, 35]
+        k_sl_vals = [1.5, 2.0, 2.5, 3.0, 3.5]
+        k_tp_vals = [1.0, 1.5, 2.0, 2.5]
+        min_sl_points_vals = [5.0, 6.5, 8.0]
+        min_tp_points_vals = [5.0, 6.5, 8.0]
+    else:
+        raise ValueError(f"Unknown preset: {preset}")
+
+    grid = [
+        {
+            "ema_fast": ema_fast,
+            "ema_slow": ema_slow,
+            "adx_th": adx_th,
+            "k_sl": k_sl,
+            "k_tp": k_tp,
+            "min_sl_points": min_sl_points,
+            "min_tp_points": min_tp_points,
+        }
+        for ema_fast, ema_slow, adx_th, k_sl, k_tp, min_sl_points, min_tp_points in product(
+            ema_fast_vals,
+            ema_slow_vals,
+            adx_th_vals,
+            k_sl_vals,
+            k_tp_vals,
+            min_sl_points_vals,
+            min_tp_points_vals,
+        )
+    ]
+    return grid
+
+
+def build_grid(strategy_id: str, preset: Literal["small", "medium", "large"] = "medium") -> List[Dict[str, Any]]:
+    """Build grid for given strategy with preset size.
+    
+    Args:
+        strategy_id: Strategy identifier
+        preset: Grid size (small, medium, large)
+    """
+    if strategy_id == "S1_TREND_EMA_ATR_ADX":
+        return build_grid_s1(preset)
+    raise ValueError(f"Grid not defined for strategy: {strategy_id}")
 
 ================
 File: validation/filter_tuner.py
@@ -4539,6 +4183,214 @@ def test_backtest_runs_medium_dataset() -> None:
     assert trades["regime_snapshot"].str.contains("VOL=").all()
 
 ================
+File: tuning/worker.py
+================
+from __future__ import annotations
+
+import copy
+from typing import Any, Dict, Union
+
+import pandas as pd
+
+from backtest.orchestrator import BacktestOrchestrator
+from configs.loader import load_config
+from data.io import load_ohlc_csv
+
+
+def run_worker_single_scenario(
+    config_path: str,
+    strategy_id: str,
+    param_set: Dict[str, Any],
+    df_by_symbol_or_paths: Union[Dict[str, pd.DataFrame], Dict[str, str]],
+    scenario: str,
+) -> Dict[str, Any]:
+    """Worker function: evaluate one parameter set for a single scenario (fast tuning).
+    
+    Args:
+        config_path: Path to YAML config
+        strategy_id: Strategy to tune
+        param_set: Parameter combination to test
+        df_by_symbol_or_paths: Either Dict[symbol -> DataFrame] or Dict[symbol -> CSV path]
+        scenario: Scenario to evaluate (A, B, or C)
+    
+    Returns:
+        Dict with params and metrics for the specified scenario only.
+        Always includes score_B (using the tuning scenario's profit_factor).
+    """
+    cfg = load_config(config_path)
+
+    # Support both DataFrames and CSV paths for backward compatibility
+    df_by_symbol: Dict[str, pd.DataFrame] = {}
+    for symbol, data in df_by_symbol_or_paths.items():
+        if data is None:
+            continue
+        if isinstance(data, pd.DataFrame):
+            df_by_symbol[symbol] = data
+        else:
+            df_by_symbol[symbol] = load_ohlc_csv(data)
+
+    cfg_copy = copy.deepcopy(cfg)
+    cfg_copy.strategies.enabled = [strategy_id]
+    cfg_copy.strategies.params[strategy_id] = param_set
+
+    orchestrator = BacktestOrchestrator()
+    trades, report = orchestrator.run(df_by_symbol, cfg_copy)
+
+    metrics_by_scenario = report.get("metrics", {}).get("by_scenario", {})
+    scenario_metrics = metrics_by_scenario.get(scenario, {})
+
+    trades_count = int(scenario_metrics.get("trades", 0))
+    expectancy = float(scenario_metrics.get("expectancy", 0.0))
+    pf = float(scenario_metrics.get("profit_factor", 0.0))
+    max_dd = float(scenario_metrics.get("max_drawdown", 0.0))
+
+    result = {"params": param_set}
+    result[f"trades_{scenario}"] = trades_count
+    result[f"expectancy_{scenario}"] = expectancy
+    result[f"pf_{scenario}"] = pf
+    result[f"max_drawdown_{scenario}"] = max_dd
+
+    # Score is based on the tuning scenario's pf
+    score = pf
+    if trades_count < 300:
+        score *= 0.25
+
+    result["score_B"] = score
+
+    return result
+
+
+def run_worker_full_scenarios(
+    config_path: str,
+    strategy_id: str,
+    param_set: Dict[str, Any],
+    df_by_symbol_or_paths: Union[Dict[str, pd.DataFrame], Dict[str, str]],
+) -> Dict[str, Any]:
+    """Worker function: evaluate one parameter set across all scenarios (full eval for top_k).
+    
+    Args:
+        config_path: Path to YAML config
+        strategy_id: Strategy to tune
+        param_set: Parameter combination to test
+        df_by_symbol_or_paths: Either Dict[symbol -> DataFrame] or Dict[symbol -> CSV path]
+    
+    Returns:
+        Dict with params and metrics for all scenarios, plus score_B.
+    """
+    cfg = load_config(config_path)
+
+    # Support both DataFrames and CSV paths for backward compatibility
+    df_by_symbol: Dict[str, pd.DataFrame] = {}
+    for symbol, data in df_by_symbol_or_paths.items():
+        if data is None:
+            continue
+        if isinstance(data, pd.DataFrame):
+            df_by_symbol[symbol] = data
+        else:
+            df_by_symbol[symbol] = load_ohlc_csv(data)
+
+    cfg_copy = copy.deepcopy(cfg)
+    cfg_copy.strategies.enabled = [strategy_id]
+    cfg_copy.strategies.params[strategy_id] = param_set
+
+    orchestrator = BacktestOrchestrator()
+    trades, report = orchestrator.run(df_by_symbol, cfg_copy)
+
+    metrics_by_scenario = report.get("metrics", {}).get("by_scenario", {})
+
+    result = {"params": param_set}
+
+    for scen in ["A", "B", "C"]:
+        scenario_metrics = metrics_by_scenario.get(scen, {})
+        trades_count = int(scenario_metrics.get("trades", 0))
+        expectancy = float(scenario_metrics.get("expectancy", 0.0))
+        pf = float(scenario_metrics.get("profit_factor", 0.0))
+        max_dd = float(scenario_metrics.get("max_drawdown", 0.0))
+
+        result[f"trades_{scen}"] = trades_count
+        result[f"expectancy_{scen}"] = expectancy
+        result[f"pf_{scen}"] = pf
+        result[f"max_drawdown_{scen}"] = max_dd
+
+    # Compute score_B (for consistency with overall scoring)
+    trades_b = result.get("trades_B", 0)
+    pf_b = result.get("pf_B", 0.0)
+    score = pf_b
+    if trades_b < 300:
+        score *= 0.25
+
+    result["score_B"] = score
+
+    return result
+
+
+def run_worker(
+    config_path: str,
+    strategy_id: str,
+    param_set: Dict[str, Any],
+    df_by_symbol_or_paths: Union[Dict[str, pd.DataFrame], Dict[str, str]],
+) -> Dict[str, Any]:
+    """Legacy worker function: evaluate one parameter set across all scenarios.
+    
+    Args:
+        config_path: Path to YAML config
+        strategy_id: Strategy to tune
+        param_set: Parameter combination to test
+        df_by_symbol_or_paths: Either Dict[symbol -> DataFrame] or Dict[symbol -> CSV path]
+    
+    Returns:
+        Dict with params and metrics for all scenarios.
+    """
+    cfg = load_config(config_path)
+
+    # Support both DataFrames and CSV paths for backward compatibility
+    df_by_symbol: Dict[str, pd.DataFrame] = {}
+    for symbol, data in df_by_symbol_or_paths.items():
+        if data is None:
+            continue
+        if isinstance(data, pd.DataFrame):
+            df_by_symbol[symbol] = data
+        else:
+            df_by_symbol[symbol] = load_ohlc_csv(data)
+
+    cfg_copy = copy.deepcopy(cfg)
+    cfg_copy.strategies.enabled = [strategy_id]
+    cfg_copy.strategies.params[strategy_id] = param_set
+
+    orchestrator = BacktestOrchestrator()
+    trades, report = orchestrator.run(df_by_symbol, cfg_copy)
+
+    metrics_by_scenario = report.get("metrics", {}).get("by_scenario", {})
+
+    result = {"params": param_set}
+
+    for scenario in ["A", "B", "C"]:
+        scenario_metrics = metrics_by_scenario.get(scenario, {})
+        trades_count = int(scenario_metrics.get("trades", 0))
+        expectancy = float(scenario_metrics.get("expectancy", 0.0))
+        pf = float(scenario_metrics.get("profit_factor", 0.0))
+        max_dd = float(scenario_metrics.get("max_drawdown", 0.0))
+
+        result[f"trades_{scenario}"] = trades_count
+        result[f"expectancy_{scenario}"] = expectancy
+        result[f"pf_{scenario}"] = pf
+        result[f"max_drawdown_{scenario}"] = max_dd
+
+    trades_b = result.get("trades_B", 0)
+    pf_b = result.get("pf_B", 0.0)
+    expectancy_b = result.get("expectancy_B", 0.0)
+    max_dd_b = result.get("max_drawdown_B", 0.0)
+
+    score = pf_b
+    if trades_b < 300:
+        score *= 0.25
+
+    result["score_B"] = score
+    result["trades_B_raw"] = trades_b
+
+    return result
+
+================
 File: features/regime.py
 ================
 import warnings
@@ -4650,6 +4502,342 @@ def test_missing_block_fails(missing_block):
     data.pop(missing_block)
     with pytest.raises(ValidationError):
         Config.model_validate(data)
+
+================
+File: tests/test_run_tuning_mp.py
+================
+from __future__ import annotations
+
+import pandas as pd
+import tempfile
+from pathlib import Path
+
+from tuning.grid import build_grid
+from tuning.worker import (
+    run_worker,
+    run_worker_single_scenario,
+    run_worker_full_scenarios,
+)
+
+
+def test_grid_s1_size() -> None:
+    """Test that grid for S1 has correct size."""
+    grid = build_grid("S1_TREND_EMA_ATR_ADX")
+    expected_size = 3 * 2 * 4 * 4 * 3 * 2 * 2
+    assert len(grid) == expected_size, f"Expected {expected_size}, got {len(grid)}"
+
+
+def test_grid_s1_keys() -> None:
+    """Test that all grid entries have required keys."""
+    grid = build_grid("S1_TREND_EMA_ATR_ADX")
+    required_keys = {
+        "ema_fast",
+        "ema_slow",
+        "adx_th",
+        "k_sl",
+        "k_tp",
+        "min_sl_points",
+        "min_tp_points",
+    }
+    for params in grid:
+        assert set(params.keys()) == required_keys
+
+
+def test_worker_output_structure() -> None:
+    """Test worker function output for one parameter set (full A/B/C)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        eurusd_data = {
+            "time": pd.date_range("2024-01-01", periods=100, freq="1h"),
+            "open": [1.0 + i * 0.0001 for i in range(100)],
+            "high": [1.01 + i * 0.0001 for i in range(100)],
+            "low": [0.99 + i * 0.0001 for i in range(100)],
+            "close": [1.005 + i * 0.0001 for i in range(100)],
+        }
+        eurusd_df = pd.DataFrame(eurusd_data)
+        eurusd_csv = Path(tmpdir) / "eurusd.csv"
+        eurusd_df.to_csv(eurusd_csv, index=False)
+
+        params = {
+            "ema_fast": 20,
+            "ema_slow": 50,
+            "adx_th": 20,
+            "k_sl": 1.5,
+            "k_tp": 1.0,
+            "min_sl_points": 5.0,
+            "min_tp_points": 5.0,
+        }
+
+        df_paths = {
+            "EURUSD": str(eurusd_csv),
+            "GBPUSD": None,
+            "USDJPY": None,
+        }
+
+        result = run_worker(
+            "configs/examples/example_config.yaml",
+            "S1_TREND_EMA_ATR_ADX",
+            params,
+            df_paths,
+        )
+
+        expected_keys = {
+            "params",
+            "trades_A",
+            "trades_B",
+            "trades_C",
+            "expectancy_A",
+            "expectancy_B",
+            "expectancy_C",
+            "pf_A",
+            "pf_B",
+            "pf_C",
+            "max_drawdown_A",
+            "max_drawdown_B",
+            "max_drawdown_C",
+            "score_B",
+            "trades_B_raw",
+        }
+        assert set(result.keys()) == expected_keys, f"Missing keys: {expected_keys - set(result.keys())}"
+
+        assert isinstance(result["score_B"], (int, float))
+        assert isinstance(result["trades_A"], int)
+        assert isinstance(result["expectancy_B"], float)
+        assert isinstance(result["pf_B"], float)
+        assert isinstance(result["max_drawdown_B"], float)
+
+
+def test_worker_single_scenario_output_structure() -> None:
+    """Test run_worker_single_scenario returns only ONE scenario metrics."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        eurusd_data = {
+            "time": pd.date_range("2024-01-01", periods=100, freq="1h"),
+            "open": [1.0 + i * 0.0001 for i in range(100)],
+            "high": [1.01 + i * 0.0001 for i in range(100)],
+            "low": [0.99 + i * 0.0001 for i in range(100)],
+            "close": [1.005 + i * 0.0001 for i in range(100)],
+        }
+        eurusd_df = pd.DataFrame(eurusd_data)
+        eurusd_csv = Path(tmpdir) / "eurusd.csv"
+        eurusd_df.to_csv(eurusd_csv, index=False)
+
+        params = {
+            "ema_fast": 20,
+            "ema_slow": 50,
+            "adx_th": 20,
+            "k_sl": 1.5,
+            "k_tp": 1.0,
+            "min_sl_points": 5.0,
+            "min_tp_points": 5.0,
+        }
+
+        df_paths = {
+            "EURUSD": str(eurusd_csv),
+            "GBPUSD": None,
+            "USDJPY": None,
+        }
+
+        # Test with scenario B only
+        result = run_worker_single_scenario(
+            "configs/examples/example_config.yaml",
+            "S1_TREND_EMA_ATR_ADX",
+            params,
+            df_paths,
+            scenario="B",
+        )
+
+        # Should only have B metrics, not A or C
+        expected_keys = {
+            "params",
+            "trades_B",
+            "expectancy_B",
+            "pf_B",
+            "max_drawdown_B",
+            "score_B",
+        }
+        assert set(result.keys()) == expected_keys, f"Got unexpected keys: {set(result.keys())}"
+
+        # Should NOT have A or C metrics
+        unexpected_keys = {"trades_A", "trades_C", "expectancy_A", "expectancy_C"}
+        assert not (set(result.keys()) & unexpected_keys), f"Should not have A/C metrics: {set(result.keys())}"
+
+        assert isinstance(result["score_B"], (int, float))
+        assert isinstance(result["trades_B"], int)
+        assert isinstance(result["expectancy_B"], float)
+        assert isinstance(result["pf_B"], float)
+        assert isinstance(result["max_drawdown_B"], float)
+
+
+def test_worker_full_scenarios_output_structure() -> None:
+    """Test run_worker_full_scenarios returns A/B/C metrics."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        eurusd_data = {
+            "time": pd.date_range("2024-01-01", periods=100, freq="1h"),
+            "open": [1.0 + i * 0.0001 for i in range(100)],
+            "high": [1.01 + i * 0.0001 for i in range(100)],
+            "low": [0.99 + i * 0.0001 for i in range(100)],
+            "close": [1.005 + i * 0.0001 for i in range(100)],
+        }
+        eurusd_df = pd.DataFrame(eurusd_data)
+        eurusd_csv = Path(tmpdir) / "eurusd.csv"
+        eurusd_df.to_csv(eurusd_csv, index=False)
+
+        params = {
+            "ema_fast": 20,
+            "ema_slow": 50,
+            "adx_th": 20,
+            "k_sl": 1.5,
+            "k_tp": 1.0,
+            "min_sl_points": 5.0,
+            "min_tp_points": 5.0,
+        }
+
+        df_paths = {
+            "EURUSD": str(eurusd_csv),
+            "GBPUSD": None,
+            "USDJPY": None,
+        }
+
+        result = run_worker_full_scenarios(
+            "configs/examples/example_config.yaml",
+            "S1_TREND_EMA_ATR_ADX",
+            params,
+            df_paths,
+        )
+
+        # Should have all A/B/C metrics
+        expected_keys = {
+            "params",
+            "trades_A",
+            "trades_B",
+            "trades_C",
+            "expectancy_A",
+            "expectancy_B",
+            "expectancy_C",
+            "pf_A",
+            "pf_B",
+            "pf_C",
+            "max_drawdown_A",
+            "max_drawdown_B",
+            "max_drawdown_C",
+            "score_B",
+        }
+        assert set(result.keys()) == expected_keys, f"Got unexpected keys: {set(result.keys())}"
+
+        assert isinstance(result["score_B"], (int, float))
+        assert isinstance(result["trades_A"], int)
+        assert isinstance(result["trades_B"], int)
+        assert isinstance(result["trades_C"], int)
+
+
+def test_grid_size_presets() -> None:
+    """Test that grid size presets generate correct sizes."""
+    small = build_grid("S1_TREND_EMA_ATR_ADX", preset="small")
+    medium = build_grid("S1_TREND_EMA_ATR_ADX", preset="medium")
+    large = build_grid("S1_TREND_EMA_ATR_ADX", preset="large")
+
+    # Check sizes (calculated as product of parameter ranges)
+    # small: 1 × 1 × 3 × 2 × 1 × 1 × 1 = 6
+    # medium: 3 × 2 × 4 × 4 × 3 × 2 × 2 = 1152
+    # large: 5 × 3 × 5 × 5 × 4 × 3 × 3 = 13500
+    assert len(small) == 6, f"small: expected 6, got {len(small)}"
+    assert len(medium) == 1152, f"medium: expected 1152, got {len(medium)}"
+    assert len(large) == 13500, f"large: expected 13500, got {len(large)}"
+
+    # Verify all have correct keys
+    required_keys = {
+        "ema_fast",
+        "ema_slow",
+        "adx_th",
+        "k_sl",
+        "k_tp",
+        "min_sl_points",
+        "min_tp_points",
+    }
+    for grid in [small, medium, large]:
+        for params in grid[:3]:  # Check first 3
+            assert set(params.keys()) == required_keys
+
+
+def test_limit_bars_truncates_dataframe() -> None:
+    """Test that limit_bars correctly truncates OHLC data."""
+    # Create test data
+    df_test = pd.DataFrame({
+        "time": pd.date_range("2024-01-01", periods=1000, freq="1h"),
+        "open": [1.0 + i * 0.0001 for i in range(1000)],
+        "high": [1.01 + i * 0.0001 for i in range(1000)],
+        "low": [0.99 + i * 0.0001 for i in range(1000)],
+        "close": [1.005 + i * 0.0001 for i in range(1000)],
+    })
+
+    # Test limiting to 100 bars (should be last 100 rows)
+    limit_bars = 100
+    df_limited = df_test.tail(limit_bars).reset_index(drop=True)
+
+    assert len(df_limited) == limit_bars, f"Expected {limit_bars} rows, got {len(df_limited)}"
+    
+    # Verify it's the LAST 100 rows
+    expected_first_close = 1.005 + 900 * 0.0001  # Row 900 in original
+    actual_first_close = df_limited.iloc[0]["close"]
+    assert abs(actual_first_close - expected_first_close) < 1e-6, \
+        f"Expected first close ~{expected_first_close}, got {actual_first_close}"
+
+
+def test_worker_accepts_dataframes() -> None:
+    """Test that worker functions accept DataFrames directly (not just paths)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create test DataFrame
+        eurusd_data = {
+            "time": pd.date_range("2024-01-01", periods=100, freq="1h"),
+            "open": [1.0 + i * 0.0001 for i in range(100)],
+            "high": [1.01 + i * 0.0001 for i in range(100)],
+            "low": [0.99 + i * 0.0001 for i in range(100)],
+            "close": [1.005 + i * 0.0001 for i in range(100)],
+        }
+        eurusd_df = pd.DataFrame(eurusd_data)
+
+        params = {
+            "ema_fast": 20,
+            "ema_slow": 50,
+            "adx_th": 20,
+            "k_sl": 1.5,
+            "k_tp": 1.0,
+            "min_sl_points": 5.0,
+            "min_tp_points": 5.0,
+        }
+
+        # Pass DataFrame directly (not path)
+        df_by_symbol = {
+            "EURUSD": eurusd_df,
+            "GBPUSD": None,
+            "USDJPY": None,
+        }
+
+        # Test single scenario with DataFrame
+        result = run_worker_single_scenario(
+            "configs/examples/example_config.yaml",
+            "S1_TREND_EMA_ATR_ADX",
+            params,
+            df_by_symbol,
+            scenario="B",
+        )
+
+        assert result is not None
+        assert "score_B" in result
+        assert isinstance(result["score_B"], (int, float))
+
+        # Test full scenarios with DataFrame
+        result_full = run_worker_full_scenarios(
+            "configs/examples/example_config.yaml",
+            "S1_TREND_EMA_ATR_ADX",
+            params,
+            df_by_symbol,
+        )
+
+        assert result_full is not None
+        assert "score_B" in result_full
+        assert "trades_A" in result_full
+        assert "trades_B" in result_full
+        assert "trades_C" in result_full
 
 ================
 File: live/live_orchestrator.py
@@ -4935,6 +5123,412 @@ def _build_trade_log_entry(
 
 
 __all__ = ["LiveOrchestrator"]
+
+================
+File: scripts/run_tuning_mp.py
+================
+#!/usr/bin/env python3
+"""Multiprocessing grid search tuning with two-stage optimization.
+
+Two-stage approach:
+  Stage 1 (Fast): Evaluate all parameter combinations for tune_scenario only (default: B)
+  Stage 2 (Comprehensive): Evaluate top-K candidates with full A/B/C scenarios
+
+This significantly reduces overall evaluation time by avoiding expensive A/B/C evaluations
+for candidates that won't make the top-K cutoff.
+
+Usage:
+  python -m scripts.run_tuning_mp \\
+    --eurusd data.csv \\
+    --gbpusd data.csv \\
+    --usdjpy data.csv \\
+    --out runs_tuning/ \\
+    --top_k 10
+
+Optionally disable two-stage and run all A/B/C for all combinations:
+  python -m scripts.run_tuning_mp ... --two_stage False
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import time
+from multiprocessing import Pool, cpu_count
+from pathlib import Path
+from typing import Any, Dict, List
+
+import pandas as pd
+
+from tuning.grid import build_grid
+from tuning.worker import (
+    run_worker,
+    run_worker_single_scenario,
+    run_worker_full_scenarios,
+)
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Multiprocessing grid search tuning for single strategy."
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="configs/examples/example_config.yaml",
+        help="Path to YAML config file.",
+    )
+    parser.add_argument(
+        "--strategy_id",
+        type=str,
+        default="S1_TREND_EMA_ATR_ADX",
+        help="Strategy ID to tune.",
+    )
+    parser.add_argument("--eurusd", type=str, help="Path to EURUSD OHLC CSV.")
+    parser.add_argument("--gbpusd", type=str, help="Path to GBPUSD OHLC CSV.")
+    parser.add_argument("--usdjpy", type=str, help="Path to USDJPY OHLC CSV.")
+    parser.add_argument(
+        "--out", type=str, default="runs_tuning/", help="Output directory."
+    )
+    parser.add_argument(
+        "--top_k", type=int, default=10, help="Number of top results to save."
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Number of workers (default: cpu_count-1, max 7).",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        default=True,
+        help="Overwrite output files.",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=None, help="Random seed (from config if not set)."
+    )
+    parser.add_argument(
+        "--progress_every",
+        type=int,
+        default=50,
+        help="Print progress every N results.",
+    )
+    parser.add_argument(
+        "--show_eta",
+        action="store_true",
+        default=True,
+        help="Show estimated time of arrival.",
+    )
+    parser.add_argument(
+        "--two_stage",
+        action="store_true",
+        default=True,
+        help="Use two-stage tuning: fast B-only, then full A/B/C for top_k.",
+    )
+    parser.add_argument(
+        "--tune_scenario",
+        type=str,
+        choices=["A", "B", "C"],
+        default="B",
+        help="Scenario to use for stage-1 grid search (default: B).",
+    )
+    parser.add_argument(
+        "--grid_size",
+        type=str,
+        choices=["small", "medium", "large"],
+        default="medium",
+        help="Grid size preset: small (6), medium (1152), large (9000) combinations.",
+    )
+    parser.add_argument(
+        "--limit_bars",
+        type=int,
+        default=None,
+        help="Limit each OHLC dataframe to last N bars (for faster tuning on recent data).",
+    )
+
+    args = parser.parse_args()
+
+    if not any([args.eurusd, args.gbpusd, args.usdjpy]):
+        parser.error("At least one symbol CSV required (--eurusd, --gbpusd, --usdjpy).")
+
+    return args
+
+
+
+def _get_worker_count() -> int:
+    """Get safe worker count: cpu_count-1, capped at 7."""
+    count = max(1, cpu_count() - 1)
+    return min(count, 7)
+
+
+def _format_time(seconds: float) -> str:
+    """Format seconds as HH:MM:SS."""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def _print_progress(
+    completed: int,
+    total: int,
+    elapsed: float,
+    best_result: Dict[str, Any],
+    show_eta: bool,
+) -> None:
+    """Print progress line with ETA."""
+    pct = (completed / total) * 100.0 if total > 0 else 0.0
+
+    if show_eta and completed > 0:
+        avg_time = elapsed / completed
+        eta_seconds = avg_time * (total - completed)
+        eta_str = _format_time(eta_seconds)
+    else:
+        eta_str = "N/A"
+
+    elapsed_str = _format_time(elapsed)
+    best_score = best_result.get("score_B", 0.0)
+    best_pf = best_result.get("pf_B", 0.0)
+    best_exp = best_result.get("expectancy_B", 0.0)
+
+    print(
+        f"[tuning] {completed}/{total} ({pct:.1f}%) "
+        f"elapsed={elapsed_str} eta={eta_str} "
+        f"best_score={best_score:.4f} best_pf_B={best_pf:.4f} best_exp_B={best_exp:.6f}"
+    )
+
+
+
+def _flatten_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Flatten result dict for CSV export."""
+    row = {}
+    params = result.get("params", {})
+    row.update(params)
+    for key in result:
+        if key != "params":
+            row[key] = result[key]
+    return row
+
+
+def main() -> None:
+    args = _parse_args()
+
+    # Load CSVs once in main process (avoid repeated loading in workers)
+    print("Loading OHLC data...")
+    df_by_symbol: Dict[str, pd.DataFrame] = {}
+    for symbol, path in [("EURUSD", args.eurusd), ("GBPUSD", args.gbpusd), ("USDJPY", args.usdjpy)]:
+        if path:
+            from data.io import load_ohlc_csv
+            df = load_ohlc_csv(path)
+            if args.limit_bars:
+                df = df.tail(args.limit_bars).reset_index(drop=True)
+                print(f"  {symbol}: {len(df)} bars (limited to last {args.limit_bars})")
+            else:
+                print(f"  {symbol}: {len(df)} bars")
+            df_by_symbol[symbol] = df
+
+    grid = build_grid(args.strategy_id, preset=args.grid_size)
+    print(f"\nGrid size: {len(grid)} combinations ({args.grid_size})")
+
+    num_workers = args.workers if args.workers else _get_worker_count()
+    print(f"Using {num_workers} workers")
+
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Store metadata for later
+    metadata = {
+        "limit_bars": args.limit_bars,
+        "grid_size": args.grid_size,
+        "workers": num_workers,
+        "two_stage": args.two_stage,
+        "tune_scenario": args.tune_scenario,
+        "total_combinations": len(grid),
+    }
+
+    if args.two_stage:
+        print(f"\n=== STAGE 1: Fast {args.tune_scenario}-only Grid Search ===")
+        results_stage1 = _run_stage1_fast_search(
+            args, grid, df_by_symbol, num_workers
+        )
+
+        print(f"\n=== STAGE 2: Full A/B/C Evaluation for Top-K ===")
+        results_final = _run_stage2_topk_evaluation(
+            args, results_stage1, df_by_symbol, num_workers
+        )
+    else:
+        print(f"\n=== Single Stage: Full A/B/C for all combinations ===")
+        results_final = _run_single_stage(
+            args, grid, df_by_symbol, num_workers
+        )
+
+    _save_results(results_final, args, out_dir, metadata)
+
+
+def _run_stage1_fast_search(
+    args: argparse.Namespace,
+    grid: List[Dict[str, Any]],
+    df_by_symbol: Dict[str, pd.DataFrame],
+    num_workers: int,
+) -> List[Dict[str, Any]]:
+    """Stage 1: Fast grid search evaluating only tune_scenario."""
+    worker_inputs = [
+        (args.config, args.strategy_id, params, df_by_symbol, args.tune_scenario)
+        for params in grid
+    ]
+
+    results: List[Dict[str, Any]] = []
+    best_result: Dict[str, Any] = {}
+    start_time = time.time()
+
+    with Pool(processes=num_workers) as pool:
+        for i, result in enumerate(
+            pool.starmap(run_worker_single_scenario, worker_inputs), 1
+        ):
+            results.append(result)
+
+            # Always use score_B for consistency across all phases
+            if result.get("score_B", float("-inf")) > best_result.get("score_B", float("-inf")):
+                best_result = result
+
+            if i % args.progress_every == 0 or i == len(grid):
+                elapsed = time.time() - start_time
+                _print_progress(i, len(grid), elapsed, best_result, args.show_eta)
+
+    print(f"\nStage 1 complete: {len(results)} evaluated")
+    return results
+
+
+def _run_stage2_topk_evaluation(
+    args: argparse.Namespace,
+    results_stage1: List[Dict[str, Any]],
+    df_by_symbol: Dict[str, pd.DataFrame],
+    num_workers: int,
+) -> List[Dict[str, Any]]:
+    """Stage 2: Comprehensive A/B/C evaluation for top-K candidates."""
+    df_temp = pd.DataFrame(results_stage1)
+    df_sorted = df_temp.sort_values(by="score_B", ascending=False)
+    top_k_results_stage1 = df_sorted.head(args.top_k).to_dict("records")
+
+    print(f"Evaluating top {len(top_k_results_stage1)} candidates with full A/B/C scenarios...")
+
+    top_k_params = [r["params"] for r in top_k_results_stage1]
+    worker_inputs = [
+        (args.config, args.strategy_id, params, df_by_symbol) for params in top_k_params
+    ]
+
+    results_topk: List[Dict[str, Any]] = []
+    best_result: Dict[str, Any] = {}
+    start_time = time.time()
+
+    with Pool(processes=num_workers) as pool:
+        for i, result in enumerate(
+            pool.starmap(run_worker_full_scenarios, worker_inputs), 1
+        ):
+            results_topk.append(result)
+
+            if result.get("score_B", float("-inf")) > best_result.get("score_B", float("-inf")):
+                best_result = result
+
+            elapsed = time.time() - start_time
+            _print_progress(i, len(top_k_params), elapsed, best_result, args.show_eta)
+
+    print(f"\nStage 2 complete: Full A/B/C evaluation done on {len(results_topk)} candidates")
+    return results_topk
+
+
+def _run_single_stage(
+    args: argparse.Namespace,
+    grid: List[Dict[str, Any]],
+    df_by_symbol: Dict[str, pd.DataFrame],
+    num_workers: int,
+) -> List[Dict[str, Any]]:
+    """Single stage: Evaluate all candidates with A/B/C."""
+    worker_inputs = [
+        (args.config, args.strategy_id, params, df_by_symbol) for params in grid
+    ]
+
+    results: List[Dict[str, Any]] = []
+    best_result: Dict[str, Any] = {}
+    start_time = time.time()
+
+    with Pool(processes=num_workers) as pool:
+        for i, result in enumerate(pool.imap_unordered(run_worker, worker_inputs), 1):
+            results.append(result)
+
+            if result.get("score_B", float("-inf")) > best_result.get("score_B", float("-inf")):
+                best_result = result
+
+            if i % args.progress_every == 0 or i == len(grid):
+                elapsed = time.time() - start_time
+                _print_progress(i, len(grid), elapsed, best_result, args.show_eta)
+
+    print(f"\nEvaluated {len(results)} candidates")
+    return results
+
+
+def _save_results(
+    results: List[Dict[str, Any]],
+    args: argparse.Namespace,
+    out_dir: Path,
+    metadata: Dict[str, Any],
+) -> None:
+    """Save tuning results to CSV and JSON files with metadata."""
+    df_results = pd.DataFrame([_flatten_result(r) for r in results])
+    df_results = df_results.sort_values(
+        by=["score_B", "expectancy_B", "max_drawdown_B"],
+        ascending=[False, False, True],
+    )
+
+    csv_path = out_dir / "tuning_results.csv"
+    json_path = out_dir / "tuning_results.json"
+    top_k_csv = out_dir / "top_k.csv"
+    top_k_json = out_dir / "top_k.json"
+    metadata_path = out_dir / "tuning_metadata.json"
+
+    for path in [csv_path, json_path, top_k_csv, top_k_json, metadata_path]:
+        if path.exists():
+            path.unlink()
+
+    df_results.to_csv(csv_path, index=False)
+
+    # Save results with metadata in JSON
+    output_json = {
+        "metadata": metadata,
+        "results": results,
+    }
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(output_json, f, indent=2)
+
+    top_k_results = results[: args.top_k]
+    df_top_k = pd.DataFrame([_flatten_result(r) for r in top_k_results])
+    df_top_k.to_csv(top_k_csv, index=False)
+
+    # Save top-k with metadata in JSON
+    top_k_json_output = {
+        "metadata": metadata,
+        "results": top_k_results,
+    }
+    with open(top_k_json, "w", encoding="utf-8") as f:
+        json.dump(top_k_json_output, f, indent=2)
+
+    # Save metadata separately for easy access
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
+
+    best = results[0] if results else {}
+    print(f"\nBest result:")
+    print(f"  Score: {best.get('score_B', 0.0):.4f}")
+    print(f"  Params: {best.get('params', {})}")
+
+    print(f"\nOutputs saved to: {out_dir.resolve()}")
+
+
+
+
+if __name__ == "__main__":
+    main()
 
 ================
 File: strategies/s1_trend_ema_atr_adx.py

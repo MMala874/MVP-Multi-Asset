@@ -147,8 +147,9 @@ def _print_progress(
     elapsed: float,
     best_result: Dict[str, Any],
     show_eta: bool,
+    stage: str = "Stage 1",
 ) -> None:
-    """Print progress line with ETA."""
+    """Print progress line with ETA and best result info."""
     pct = (completed / total) * 100.0 if total > 0 else 0.0
 
     if show_eta and completed > 0:
@@ -160,13 +161,12 @@ def _print_progress(
 
     elapsed_str = _format_time(elapsed)
     best_score = best_result.get("score_B", 0.0)
-    best_pf = best_result.get("pf_B", 0.0)
-    best_exp = best_result.get("expectancy_B", 0.0)
+    best_params = best_result.get("params", {})
 
     print(
-        f"[tuning] {completed}/{total} ({pct:.1f}%) "
+        f"[{stage}] {completed}/{total} ({pct:.1f}%) "
         f"elapsed={elapsed_str} eta={eta_str} "
-        f"best_score={best_score:.4f} best_pf_B={best_pf:.4f} best_exp_B={best_exp:.6f}"
+        f"best_score={best_score:.4f}"
     )
 
 
@@ -265,9 +265,9 @@ def _run_stage1_fast_search(
 
             if i % args.progress_every == 0 or i == len(grid):
                 elapsed = time.time() - start_time
-                _print_progress(i, len(grid), elapsed, best_result, args.show_eta)
+                _print_progress(i, len(grid), elapsed, best_result, args.show_eta, "Stage 1")
 
-    print(f"\nStage 1 complete: {len(results)} evaluated")
+    print(f"Stage 1 complete: {len(results)} evaluated\n")
     return results
 
 
@@ -303,9 +303,9 @@ def _run_stage2_topk_evaluation(
                 best_result = result
 
             elapsed = time.time() - start_time
-            _print_progress(i, len(top_k_params), elapsed, best_result, args.show_eta)
+            _print_progress(i, len(top_k_params), elapsed, best_result, args.show_eta, "Stage 2")
 
-    print(f"\nStage 2 complete: Full A/B/C evaluation done on {len(results_topk)} candidates")
+    print(f"Stage 2 complete: Full A/B/C evaluation done on {len(results_topk)} candidates\n")
     return results_topk
 
 
@@ -333,9 +333,9 @@ def _run_single_stage(
 
             if i % args.progress_every == 0 or i == len(grid):
                 elapsed = time.time() - start_time
-                _print_progress(i, len(grid), elapsed, best_result, args.show_eta)
+                _print_progress(i, len(grid), elapsed, best_result, args.show_eta, "Single Stage")
 
-    print(f"\nEvaluated {len(results)} candidates")
+    print(f"Evaluated {len(results)} candidates\n")
     return results
 
 
