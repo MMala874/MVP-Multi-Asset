@@ -48,7 +48,7 @@ def run_worker_single_scenario(
     cfg_copy.outputs.debug = False  # Silence debug output during tuning
 
     orchestrator = BacktestOrchestrator()
-    trades, report = orchestrator.run(df_by_symbol, cfg_copy)
+    trades, report = orchestrator.run(df_by_symbol, cfg_copy, scenarios=[scenario])
 
     metrics_by_scenario = report.get("metrics", {}).get("by_scenario", {})
     scenario_metrics = metrics_by_scenario.get(scenario, {})
@@ -109,7 +109,7 @@ def run_worker_full_scenarios(
     cfg_copy.outputs.debug = False  # Silence debug output during tuning
 
     orchestrator = BacktestOrchestrator()
-    trades, report = orchestrator.run(df_by_symbol, cfg_copy)
+    trades, report = orchestrator.run(df_by_symbol, cfg_copy, scenarios=["A", "B", "C"])
 
     metrics_by_scenario = report.get("metrics", {}).get("by_scenario", {})
 
@@ -174,7 +174,7 @@ def run_worker(
     cfg_copy.outputs.debug = False  # Silence debug output during tuning
 
     orchestrator = BacktestOrchestrator()
-    trades, report = orchestrator.run(df_by_symbol, cfg_copy)
+    trades, report = orchestrator.run(df_by_symbol, cfg_copy, scenarios=None)
 
     metrics_by_scenario = report.get("metrics", {}).get("by_scenario", {})
 

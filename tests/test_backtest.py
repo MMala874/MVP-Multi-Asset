@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from backtest.metrics import compute_metrics
 from backtest.orchestrator import BacktestOrchestrator
@@ -20,6 +21,22 @@ from configs.models import (
     Validation,
     WalkForward,
 )
+
+
+@pytest.fixture
+def df_eurusd_1min_1000():
+    """Create a 1000-bar EURUSD M1 fixture for testing."""
+    import numpy as np
+    n_bars = 1000
+    np.random.seed(42)
+    returns = np.random.randn(n_bars) * 0.001
+    close = (1 + returns).cumprod()
+    return pd.DataFrame({
+        "open": close * (1 + np.random.randn(n_bars) * 0.0001),
+        "high": close * (1 + np.abs(np.random.randn(n_bars) * 0.0003)),
+        "low": close * (1 - np.abs(np.random.randn(n_bars) * 0.0003)),
+        "close": close,
+    })
 
 
 def _make_config() -> Config:
@@ -167,3 +184,59 @@ def test_metrics_fallback_to_pnl_without_pnl_pips():
     expected_profit_factor = (10.0 + 7.5) / abs(-5.0)
     assert abs(overall["profit_factor"] - expected_profit_factor) < 0.01, \
         f"Expected PF {expected_profit_factor}, got {overall['profit_factor']}"
+
+
+def test_orchestrator_scenario_filtering(df_eurusd_1min_1000):
+    """Test that orchestrator can filter scenarios (e.g., run only B)."""
+    config = _make_config()
+    orchestrator = BacktestOrchestrator()
+    
+    # Run with scenarios=["B"] only
+    trades, report = orchestrator.run({"EURUSD": df_eurusd_1min_1000}, config, scenarios=["B"])
+    
+    # Should have trades and report
+    assert len(trades) > 0, "No trades generated for scenario B"
+    assert "metrics" in report, "Report missing metrics"
+    
+    by_scenario = report["metrics"]["by_scenario"]
+    
+    # Only B scenario should be present
+    assert "B" in by_scenario, "Scenario B missing from metrics"
+    assert len(by_scenario) == 1, f"Expected only 1 scenario, got {len(by_scenario)}"
+    
+    # All trades should be from scenario B
+    assert (trades["scenario"] == "B").all(), "Some trades are not from scenario B"
+
+
+def test_orchestrator_all_scenarios_default(df_eurusd_1min_1000):
+    """Test that orchestrator runs all scenarios by default (scenarios=None)."""
+    config = _make_config()
+    orchestrator = BacktestOrchestrator()
+    
+    # Run with scenarios=None (default)
+    trades, report = orchestrator.run({"EURUSD": df_eurusd_1min_1000}, config, scenarios=None)
+    
+    # Should have all three scenarios
+    by_scenario = report["metrics"]["by_scenario"]
+    
+    assert "A" in by_scenario, "Scenario A missing"
+    assert "B" in by_scenario, "Scenario B missing"
+    assert "C" in by_scenario, "Scenario C missing"
+    assert len(by_scenario) == 3, f"Expected 3 scenarios, got {len(by_scenario)}"
+
+
+def test_orchestrator_multiple_scenarios(df_eurusd_1min_1000):
+    """Test that orchestrator can run specific scenario combinations."""
+    config = _make_config()
+    orchestrator = BacktestOrchestrator()
+    
+    # Run with scenarios=["A", "C"] (skip B)
+    trades, report = orchestrator.run({"EURUSD": df_eurusd_1min_1000}, config, scenarios=["A", "C"])
+    
+    # Should have only A and C
+    by_scenario = report["metrics"]["by_scenario"]
+    
+    assert "A" in by_scenario, "Scenario A missing"
+    assert "C" in by_scenario, "Scenario C missing"
+    assert "B" not in by_scenario, "Scenario B should not be present"
+    assert len(by_scenario) == 2, f"Expected 2 scenarios, got {len(by_scenario)}"

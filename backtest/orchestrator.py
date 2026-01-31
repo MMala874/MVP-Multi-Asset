@@ -36,14 +36,33 @@ class _StrategySpec:
 
 
 class BacktestOrchestrator:
-    def run(self, df_by_symbol: Dict[str, pd.DataFrame], config: Config) -> Tuple[pd.DataFrame, Dict[str, object]]:
+    def run(
+        self,
+        df_by_symbol: Dict[str, pd.DataFrame],
+        config: Config,
+        scenarios: list[str] | None = None,
+    ) -> Tuple[pd.DataFrame, Dict[str, object]]:
+        """Run backtest for given data and config.
+        
+        Args:
+            df_by_symbol: OHLC data by symbol
+            config: Backtest configuration
+            scenarios: Optional list of scenario IDs to run (e.g., ["B"]).
+                      If None, run all scenarios (A, B, C).
+        """
         _validate_bar_contract(config)
         strategies = _load_strategies(config)
         prepared = _prepare_features(df_by_symbol, strategies, config)
 
+        # Determine which scenarios to run
+        if scenarios is None:
+            scenarios_to_run = [s.value for s in Scenario]
+        else:
+            scenarios_to_run = scenarios
+
         scenario_trades: List[pd.DataFrame] = []
-        for scenario in Scenario:
-            trades = _run_scenario(prepared, config, strategies, scenario.value)
+        for scenario_id in scenarios_to_run:
+            trades = _run_scenario(prepared, config, strategies, scenario_id)
             scenario_trades.append(trades)
 
         trades_df = pd.concat(scenario_trades, ignore_index=True) if scenario_trades else _empty_trades()
