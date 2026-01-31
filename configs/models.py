@@ -110,6 +110,7 @@ class Risk(StrictBaseModel):
     dd_day_limit: float
     dd_week_limit: float
     max_execution_errors: int
+    max_hold_bars: int = 96
 
     @model_validator(mode="after")
     def priority_requires_order(self) -> "Risk":

@@ -271,6 +271,13 @@ def _run_scenario(
                         exit_price_raw = sl_price
                     elif tp_hit:
                         exit_price_raw = tp_price
+                # Check TIME stop (max hold bars exceeded)
+                if exit_price_raw is None:
+                    held_bars = (idx + 1) - position["entry_idx"]
+                    max_hold_bars = config.risk.max_hold_bars
+                    if held_bars >= max_hold_bars:
+                        exit_price_raw = float(df["close"].iat[idx + 1])
+                # End-of-data exit
                 if exit_price_raw is None and (idx + 1) == (len(df) - 1):
                     exit_price_raw = float(df["close"].iat[idx + 1])
 
@@ -306,9 +313,17 @@ def _run_scenario(
                     if position["current_side"] == Side.LONG:
                         if sl_hit: exit_reason = "SL"
                         elif tp_hit: exit_reason = "TP"
+                        else:
+                            held_bars = (idx + 1) - position["entry_idx"]
+                            if held_bars >= config.risk.max_hold_bars:
+                                exit_reason = "TIME"
                     elif position["current_side"] == Side.SHORT:
                         if sl_hit: exit_reason = "SL"
                         elif tp_hit: exit_reason = "TP"
+                        else:
+                            held_bars = (idx + 1) - position["entry_idx"]
+                            if held_bars >= config.risk.max_hold_bars:
+                                exit_reason = "TIME"
 
                     pip = PIP_SIZES.get(symbol, 0.0001)
                     pip_size = PIP_SIZES.get(symbol, 0.0001)

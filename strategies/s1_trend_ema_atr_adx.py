@@ -85,9 +85,11 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     else:
         sl_points = float(k_sl) * atr_value
 
+    min_tp_points = float(_get_param(config, "min_tp_points", 5.0))
     tp_points: Optional[float]
-    if "k_tp" in config and atr_value is not None:
-        tp_points = float(config["k_tp"]) * atr_value
+    k_tp = config.get("k_tp")
+    if k_tp is not None and atr_value is not None:
+        tp_points = max(float(k_tp) * atr_value, min_tp_points)
     else:
         tp_points = None
 

@@ -45,6 +45,8 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     slope_th = float(_get_param(config, "slope_th", 0.01))
     k_sl = float(_get_param(config, "k_sl", 2.0))
     min_sl_points = float(_get_param(config, "min_sl_points", 5.0))
+    k_tp = config.get("k_tp", None)
+    min_tp_points = float(_get_param(config, "min_tp_points", 5.0))
 
     adx_value = _read_value(cols[adx_col], idx)
     z_value = _read_value(cols[mr_z_col], idx)
@@ -94,12 +96,16 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     if side != Side.FLAT:
         sl_points = max(k_sl * atr_value, min_sl_points)
 
+    tp_points = None
+    if side != Side.FLAT and k_tp is not None:
+        tp_points = max(k_tp * atr_value, min_tp_points)
+
     return SignalIntent(
         strategy_id=STRATEGY_ID,
         symbol=symbol,
         side=side,
         signal_time=current_time,
         sl_points=sl_points,
-        tp_points=None,
+        tp_points=tp_points,
         tags=tags,
     )

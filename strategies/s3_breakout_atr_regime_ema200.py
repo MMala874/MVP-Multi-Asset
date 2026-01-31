@@ -57,12 +57,15 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     compression_z_low = float(_get_param(config, "compression_z_low", -0.5))
     k_sl = float(_get_param(config, "k_sl", 2.0))
     min_sl_points = float(_get_param(config, "min_sl_points", 5.0))
+    k_tp = config.get("k_tp", None)
+    min_tp_points = float(_get_param(config, "min_tp_points", 5.0))
     closes = cols[close_col]
     highs = cols[high_col]
     lows = cols[low_col]
     atr_values = cols[atr_col]
     ema200_value = _read_value(cols[ema200_col], idx)
 
+    atr_value = _read_value(atr_values, idx)
     if atr_value is None and atr_col == "atr_pips":
         # fallback: convert from price-ATR to pips if only "atr" exists
         atr_price = _read_value(cols.get("atr"), idx) if "atr" in cols else None
@@ -70,7 +73,6 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
         atr_value = (atr_price / pip_size) if atr_price is not None else None
 
     close_value = _read_value(closes, idx)
-    atr_value = _read_value(atr_values, idx)
 
     tags: Dict[str, str] = {}
 
@@ -118,12 +120,16 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     if side != Side.FLAT:
         sl_points = max(k_sl * atr_value, min_sl_points)
 
+    tp_points = None
+    if side != Side.FLAT and k_tp is not None:
+        tp_points = max(k_tp * atr_value, min_tp_points)
+
     return SignalIntent(
         strategy_id=STRATEGY_ID,
         symbol=symbol,
         side=side,
         signal_time=current_time,
         sl_points=sl_points,
-        tp_points=None,
+        tp_points=tp_points,
         tags=tags,
     )
