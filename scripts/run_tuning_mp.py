@@ -104,6 +104,19 @@ def _parse_args() -> argparse.Namespace:
         default="B",
         help="Scenario to use for stage-1 grid search (default: B).",
     )
+    parser.add_argument(
+        "--grid_size",
+        type=str,
+        choices=["small", "medium", "large"],
+        default="medium",
+        help="Grid size preset: small (6), medium (1152), large (9000) combinations.",
+    )
+    parser.add_argument(
+        "--limit_bars",
+        type=int,
+        default=None,
+        help="Limit each OHLC dataframe to last N bars (for faster tuning on recent data).",
+    )
 
     args = parser.parse_args()
 
@@ -111,6 +124,7 @@ def _parse_args() -> argparse.Namespace:
         parser.error("At least one symbol CSV required (--eurusd, --gbpusd, --usdjpy).")
 
     return args
+
 
 
 def _get_worker_count() -> int:
@@ -171,14 +185,22 @@ def _flatten_result(result: Dict[str, Any]) -> Dict[str, Any]:
 def main() -> None:
     args = _parse_args()
 
-    df_paths = {
-        "EURUSD": args.eurusd,
-        "GBPUSD": args.gbpusd,
-        "USDJPY": args.usdjpy,
-    }
+    # Load CSVs once in main process (avoid repeated loading in workers)
+    print("Loading OHLC data...")
+    df_by_symbol: Dict[str, pd.DataFrame] = {}
+    for symbol, path in [("EURUSD", args.eurusd), ("GBPUSD", args.gbpusd), ("USDJPY", args.usdjpy)]:
+        if path:
+            from data.io import load_ohlc_csv
+            df = load_ohlc_csv(path)
+            if args.limit_bars:
+                df = df.tail(args.limit_bars).reset_index(drop=True)
+                print(f"  {symbol}: {len(df)} bars (limited to last {args.limit_bars})")
+            else:
+                print(f"  {symbol}: {len(df)} bars")
+            df_by_symbol[symbol] = df
 
-    grid = build_grid(args.strategy_id)
-    print(f"Grid size: {len(grid)} combinations")
+    grid = build_grid(args.strategy_id, preset=args.grid_size)
+    print(f"\nGrid size: {len(grid)} combinations ({args.grid_size})")
 
     num_workers = args.workers if args.workers else _get_worker_count()
     print(f"Using {num_workers} workers")
@@ -186,34 +208,44 @@ def main() -> None:
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Store metadata for later
+    metadata = {
+        "limit_bars": args.limit_bars,
+        "grid_size": args.grid_size,
+        "workers": num_workers,
+        "two_stage": args.two_stage,
+        "tune_scenario": args.tune_scenario,
+        "total_combinations": len(grid),
+    }
+
     if args.two_stage:
         print(f"\n=== STAGE 1: Fast {args.tune_scenario}-only Grid Search ===")
         results_stage1 = _run_stage1_fast_search(
-            args, grid, df_paths, num_workers
+            args, grid, df_by_symbol, num_workers
         )
 
         print(f"\n=== STAGE 2: Full A/B/C Evaluation for Top-K ===")
         results_final = _run_stage2_topk_evaluation(
-            args, results_stage1, df_paths, num_workers
+            args, results_stage1, df_by_symbol, num_workers
         )
     else:
         print(f"\n=== Single Stage: Full A/B/C for all combinations ===")
         results_final = _run_single_stage(
-            args, grid, df_paths, num_workers
+            args, grid, df_by_symbol, num_workers
         )
 
-    _save_results(results_final, args, out_dir)
+    _save_results(results_final, args, out_dir, metadata)
 
 
 def _run_stage1_fast_search(
     args: argparse.Namespace,
     grid: List[Dict[str, Any]],
-    df_paths: Dict[str, str],
+    df_by_symbol: Dict[str, pd.DataFrame],
     num_workers: int,
 ) -> List[Dict[str, Any]]:
     """Stage 1: Fast grid search evaluating only tune_scenario."""
     worker_inputs = [
-        (args.config, args.strategy_id, params, df_paths, args.tune_scenario)
+        (args.config, args.strategy_id, params, df_by_symbol, args.tune_scenario)
         for params in grid
     ]
 
@@ -242,20 +274,19 @@ def _run_stage1_fast_search(
 def _run_stage2_topk_evaluation(
     args: argparse.Namespace,
     results_stage1: List[Dict[str, Any]],
-    df_paths: Dict[str, str],
+    df_by_symbol: Dict[str, pd.DataFrame],
     num_workers: int,
 ) -> List[Dict[str, Any]]:
     """Stage 2: Comprehensive A/B/C evaluation for top-K candidates."""
     df_temp = pd.DataFrame(results_stage1)
-    score_col = f"score_{args.tune_scenario}"
-    df_sorted = df_temp.sort_values(by=score_col, ascending=False)
+    df_sorted = df_temp.sort_values(by="score_B", ascending=False)
     top_k_results_stage1 = df_sorted.head(args.top_k).to_dict("records")
 
     print(f"Evaluating top {len(top_k_results_stage1)} candidates with full A/B/C scenarios...")
 
     top_k_params = [r["params"] for r in top_k_results_stage1]
     worker_inputs = [
-        (args.config, args.strategy_id, params, df_paths) for params in top_k_params
+        (args.config, args.strategy_id, params, df_by_symbol) for params in top_k_params
     ]
 
     results_topk: List[Dict[str, Any]] = []
@@ -281,12 +312,12 @@ def _run_stage2_topk_evaluation(
 def _run_single_stage(
     args: argparse.Namespace,
     grid: List[Dict[str, Any]],
-    df_paths: Dict[str, str],
+    df_by_symbol: Dict[str, pd.DataFrame],
     num_workers: int,
 ) -> List[Dict[str, Any]]:
     """Single stage: Evaluate all candidates with A/B/C."""
     worker_inputs = [
-        (args.config, args.strategy_id, params, df_paths) for params in grid
+        (args.config, args.strategy_id, params, df_by_symbol) for params in grid
     ]
 
     results: List[Dict[str, Any]] = []
@@ -312,8 +343,9 @@ def _save_results(
     results: List[Dict[str, Any]],
     args: argparse.Namespace,
     out_dir: Path,
+    metadata: Dict[str, Any],
 ) -> None:
-    """Save tuning results to CSV and JSON files."""
+    """Save tuning results to CSV and JSON files with metadata."""
     df_results = pd.DataFrame([_flatten_result(r) for r in results])
     df_results = df_results.sort_values(
         by=["score_B", "expectancy_B", "max_drawdown_B"],
@@ -324,22 +356,37 @@ def _save_results(
     json_path = out_dir / "tuning_results.json"
     top_k_csv = out_dir / "top_k.csv"
     top_k_json = out_dir / "top_k.json"
+    metadata_path = out_dir / "tuning_metadata.json"
 
-    for path in [csv_path, json_path, top_k_csv, top_k_json]:
+    for path in [csv_path, json_path, top_k_csv, top_k_json, metadata_path]:
         if path.exists():
             path.unlink()
 
     df_results.to_csv(csv_path, index=False)
 
+    # Save results with metadata in JSON
+    output_json = {
+        "metadata": metadata,
+        "results": results,
+    }
     with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2)
+        json.dump(output_json, f, indent=2)
 
     top_k_results = results[: args.top_k]
     df_top_k = pd.DataFrame([_flatten_result(r) for r in top_k_results])
     df_top_k.to_csv(top_k_csv, index=False)
 
+    # Save top-k with metadata in JSON
+    top_k_json_output = {
+        "metadata": metadata,
+        "results": top_k_results,
+    }
     with open(top_k_json, "w", encoding="utf-8") as f:
-        json.dump(top_k_results, f, indent=2)
+        json.dump(top_k_json_output, f, indent=2)
+
+    # Save metadata separately for easy access
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
 
     best = results[0] if results else {}
     print(f"\nBest result:")
@@ -347,6 +394,7 @@ def _save_results(
     print(f"  Params: {best.get('params', {})}")
 
     print(f"\nOutputs saved to: {out_dir.resolve()}")
+
 
 
 

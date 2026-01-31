@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import copy
-from typing import Any, Dict
+from typing import Any, Dict, Union
 
 import pandas as pd
 
@@ -14,7 +14,7 @@ def run_worker_single_scenario(
     config_path: str,
     strategy_id: str,
     param_set: Dict[str, Any],
-    df_paths: Dict[str, str],
+    df_by_symbol_or_paths: Union[Dict[str, pd.DataFrame], Dict[str, str]],
     scenario: str,
 ) -> Dict[str, Any]:
     """Worker function: evaluate one parameter set for a single scenario (fast tuning).
@@ -23,7 +23,7 @@ def run_worker_single_scenario(
         config_path: Path to YAML config
         strategy_id: Strategy to tune
         param_set: Parameter combination to test
-        df_paths: Dict mapping symbol -> CSV path
+        df_by_symbol_or_paths: Either Dict[symbol -> DataFrame] or Dict[symbol -> CSV path]
         scenario: Scenario to evaluate (A, B, or C)
     
     Returns:
@@ -32,10 +32,15 @@ def run_worker_single_scenario(
     """
     cfg = load_config(config_path)
 
+    # Support both DataFrames and CSV paths for backward compatibility
     df_by_symbol: Dict[str, pd.DataFrame] = {}
-    for symbol, path in df_paths.items():
-        if path:
-            df_by_symbol[symbol] = load_ohlc_csv(path)
+    for symbol, data in df_by_symbol_or_paths.items():
+        if data is None:
+            continue
+        if isinstance(data, pd.DataFrame):
+            df_by_symbol[symbol] = data
+        else:
+            df_by_symbol[symbol] = load_ohlc_csv(data)
 
     cfg_copy = copy.deepcopy(cfg)
     cfg_copy.strategies.enabled = [strategy_id]
@@ -72,7 +77,7 @@ def run_worker_full_scenarios(
     config_path: str,
     strategy_id: str,
     param_set: Dict[str, Any],
-    df_paths: Dict[str, str],
+    df_by_symbol_or_paths: Union[Dict[str, pd.DataFrame], Dict[str, str]],
 ) -> Dict[str, Any]:
     """Worker function: evaluate one parameter set across all scenarios (full eval for top_k).
     
@@ -80,17 +85,22 @@ def run_worker_full_scenarios(
         config_path: Path to YAML config
         strategy_id: Strategy to tune
         param_set: Parameter combination to test
-        df_paths: Dict mapping symbol -> CSV path
+        df_by_symbol_or_paths: Either Dict[symbol -> DataFrame] or Dict[symbol -> CSV path]
     
     Returns:
         Dict with params and metrics for all scenarios, plus score_B.
     """
     cfg = load_config(config_path)
 
+    # Support both DataFrames and CSV paths for backward compatibility
     df_by_symbol: Dict[str, pd.DataFrame] = {}
-    for symbol, path in df_paths.items():
-        if path:
-            df_by_symbol[symbol] = load_ohlc_csv(path)
+    for symbol, data in df_by_symbol_or_paths.items():
+        if data is None:
+            continue
+        if isinstance(data, pd.DataFrame):
+            df_by_symbol[symbol] = data
+        else:
+            df_by_symbol[symbol] = load_ohlc_csv(data)
 
     cfg_copy = copy.deepcopy(cfg)
     cfg_copy.strategies.enabled = [strategy_id]
@@ -131,7 +141,7 @@ def run_worker(
     config_path: str,
     strategy_id: str,
     param_set: Dict[str, Any],
-    df_paths: Dict[str, str],
+    df_by_symbol_or_paths: Union[Dict[str, pd.DataFrame], Dict[str, str]],
 ) -> Dict[str, Any]:
     """Legacy worker function: evaluate one parameter set across all scenarios.
     
@@ -139,17 +149,22 @@ def run_worker(
         config_path: Path to YAML config
         strategy_id: Strategy to tune
         param_set: Parameter combination to test
-        df_paths: Dict mapping symbol -> CSV path
+        df_by_symbol_or_paths: Either Dict[symbol -> DataFrame] or Dict[symbol -> CSV path]
     
     Returns:
         Dict with params and metrics for all scenarios.
     """
     cfg = load_config(config_path)
 
+    # Support both DataFrames and CSV paths for backward compatibility
     df_by_symbol: Dict[str, pd.DataFrame] = {}
-    for symbol, path in df_paths.items():
-        if path:
-            df_by_symbol[symbol] = load_ohlc_csv(path)
+    for symbol, data in df_by_symbol_or_paths.items():
+        if data is None:
+            continue
+        if isinstance(data, pd.DataFrame):
+            df_by_symbol[symbol] = data
+        else:
+            df_by_symbol[symbol] = load_ohlc_csv(data)
 
     cfg_copy = copy.deepcopy(cfg)
     cfg_copy.strategies.enabled = [strategy_id]
