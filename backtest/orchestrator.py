@@ -300,6 +300,21 @@ def _run_scenario(
                         if position["qty"] != 0
                         else 0.0
                     )
+                    exit_reason = "EOD"
+                    if position["current_side"] == Side.LONG:
+                        if sl_hit: exit_reason = "SL"
+                        elif tp_hit: exit_reason = "TP"
+                    elif position["current_side"] == Side.SHORT:
+                        if sl_hit: exit_reason = "SL"
+                        elif tp_hit: exit_reason = "TP"
+
+                    pip = PIP_SIZES.get(symbol, 0.0001)
+                    side_sign = 1 if position["current_side"] == Side.LONG else -1
+                    gross_pips = side_sign * (exit_price_raw - float(position["entry_price"])) / pip
+                    cost_pips = float(position["spread_used"]) + 2*float(position["slippage_used"])
+                    pnl_pips = gross_pips - cost_pips
+
+
                     trades.append(
                         {
                             "trade_id": trade_id,
@@ -321,6 +336,13 @@ def _run_scenario(
                             "scenario": scenario,
                             "regime_snapshot": df["regime_snapshot"].iat[idx],
                             "reason_codes": position["reason_codes"],
+                            "exit_reason": exit_reason,
+                            "sl_price": position["sl_price"],
+                            "tp_price": position["tp_price"],
+                            "gross_pips": gross_pips,
+                            "cost_pips": cost_pips,
+                            "pnl_pips": pnl_pips,
+
                         }
                     )
                     trade_id += 1
@@ -409,7 +431,7 @@ def _run_scenario(
                         tp_price = base_price + tp_dist_price
                     elif order.side == Side.SHORT:
                         tp_price = base_price - tp_dist_price
-                        
+
                 position = {
                     "current_side": order.side,
                     "entry_price": entry_price,
