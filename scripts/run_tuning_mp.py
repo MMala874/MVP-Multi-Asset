@@ -1,4 +1,24 @@
 #!/usr/bin/env python3
+"""Multiprocessing grid search tuning with two-stage optimization.
+
+Two-stage approach:
+  Stage 1 (Fast): Evaluate all parameter combinations for tune_scenario only (default: B)
+  Stage 2 (Comprehensive): Evaluate top-K candidates with full A/B/C scenarios
+
+This significantly reduces overall evaluation time by avoiding expensive A/B/C evaluations
+for candidates that won't make the top-K cutoff.
+
+Usage:
+  python -m scripts.run_tuning_mp \\
+    --eurusd data.csv \\
+    --gbpusd data.csv \\
+    --usdjpy data.csv \\
+    --out runs_tuning/ \\
+    --top_k 10
+
+Optionally disable two-stage and run all A/B/C for all combinations:
+  python -m scripts.run_tuning_mp ... --two_stage False
+"""
 from __future__ import annotations
 
 import argparse
