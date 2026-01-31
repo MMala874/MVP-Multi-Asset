@@ -387,21 +387,29 @@ def _run_scenario(
                     atr_series=df["atr"],
                 )
                 entry_price_adj = _apply_cost(entry_price, entry_cost, order.side, symbol)
+                base_price = entry_price_adj
                 assert entry_price > 0
                 assert entry_price_adj > 0
                 reason_codes = _encode_reason_codes(order.meta, filtered)
                 sl_price = None
                 tp_price = None
+
+                base_price = entry_price_adj
+
                 if order.sl_points is not None:
+                    sl_dist_price = to_price(symbol, float(order.sl_points))
                     if order.side == Side.LONG:
-                        sl_price = entry_price - order.sl_points
+                        sl_price = base_price - sl_dist_price
                     elif order.side == Side.SHORT:
-                        sl_price = entry_price + order.sl_points
+                        sl_price = base_price + sl_dist_price
+
                 if order.tp_points is not None:
+                    tp_dist_price = to_price(symbol, float(order.tp_points))
                     if order.side == Side.LONG:
-                        tp_price = entry_price + order.tp_points
+                        tp_price = base_price + tp_dist_price
                     elif order.side == Side.SHORT:
-                        tp_price = entry_price - order.tp_points
+                        tp_price = base_price - tp_dist_price
+                        
                 position = {
                     "current_side": order.side,
                     "entry_price": entry_price,
