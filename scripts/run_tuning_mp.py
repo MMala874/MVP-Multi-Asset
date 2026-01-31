@@ -107,7 +107,6 @@ def _parse_args() -> argparse.Namespace:
         default=True,
         help="Use two-stage tuning: fast B-only, then full A/B/C for top_k.",
     )
-    ]
     parser.add_argument(
         "--tune_scenario",
         type=str,
