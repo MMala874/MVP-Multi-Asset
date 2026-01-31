@@ -1,5 +1,6 @@
 import pandas as pd
 
+from backtest.metrics import compute_metrics
 from backtest.orchestrator import BacktestOrchestrator
 from backtest.trade_log import TRADE_LOG_COLUMNS
 from configs.models import (
@@ -110,3 +111,25 @@ def test_scenarios_three_runs():
 
     trades, _ = orchestrator.run({"EURUSD": df}, config)
     assert set(trades["scenario"].unique()) == {"A", "B", "C"}
+
+def test_metrics_use_pnl_pips_when_available():
+    """Verify metrics use pnl_pips when available, not pnl."""
+    trades_df = pd.DataFrame({
+        "pnl": [100.0, -50.0, 75.0],
+        "pnl_pips": [10.0, -5.0, 7.5],
+        "strategy_id": ["S1", "S1", "S1"],
+        "symbol": ["EURUSD", "EURUSD", "EURUSD"],
+        "regime_snapshot": ["A", "A", "A"],
+        "scenario": ["A", "A", "A"],
+    })
+    
+    metrics = compute_metrics(trades_df)
+    overall = metrics["overall"]
+    
+    # Expectancy should be based on pnl_pips (10 - 5 + 7.5) / 3 = 4.166...
+    expected_expectancy = (10.0 - 5.0 + 7.5) / 3
+    assert abs(overall["expectancy"] - expected_expectancy) < 0.01
+    
+    # Profit factor should be based on pnl_pips: (10 + 7.5) / abs(-5) = 3.5
+    expected_profit_factor = (10.0 + 7.5) / abs(-5.0)
+    assert abs(overall["profit_factor"] - expected_profit_factor) < 0.01

@@ -34,7 +34,12 @@ def _group_metrics(trades: pd.DataFrame, column: str) -> Dict[str, Dict[str, flo
 
 
 def _calc_metrics(trades: pd.DataFrame) -> Dict[str, float]:
-    pnl = trades["pnl"].astype(float)
+    # Use pnl_pips if available, otherwise fallback to pnl
+    if "pnl_pips" in trades.columns:
+        pnl = trades["pnl_pips"].astype(float)
+    else:
+        pnl = trades["pnl"].astype(float)
+    
     expectancy = float(pnl.mean()) if not pnl.empty else 0.0
 
     gains = pnl[pnl > 0].sum()

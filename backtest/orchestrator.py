@@ -239,6 +239,8 @@ def _run_scenario(
             "tp_price": None,
             "spread_used": None,
             "slippage_used": None,
+            "entry_cost_pips": None,
+            "exit_cost_pips": None,
             "reason_codes": None,
         }
         cols = {col: df[col].to_numpy() for col in df.columns}
@@ -289,6 +291,7 @@ def _run_scenario(
                         df=df,
                         atr_series=df["atr"],
                     )[1]
+                    position["exit_cost_pips"] = exit_cost
                     exit_price_raw = float(exit_price_raw)
                     exit_price_adj = _apply_cost(
                         exit_price_raw,
@@ -338,7 +341,9 @@ def _run_scenario(
                     else:
                         gross_pips = 0.0
 
-                    cost_pips = float(position["spread_used"]) + 2*float(position["slippage_used"])
+                    entry_cost_pips = float(position["entry_cost_pips"]) if position["entry_cost_pips"] is not None else 0.0
+                    exit_cost_pips = float(position["exit_cost_pips"]) if position["exit_cost_pips"] is not None else 0.0
+                    cost_pips = entry_cost_pips + exit_cost_pips
                     pnl_pips = gross_pips - cost_pips
 
 
@@ -473,6 +478,8 @@ def _run_scenario(
                     "tp_price": tp_price,
                     "spread_used": spread_used,
                     "slippage_used": slippage_used,
+                    "entry_cost_pips": entry_cost,
+                    "exit_cost_pips": None,
                     "reason_codes": reason_codes,
                 }
                 break
