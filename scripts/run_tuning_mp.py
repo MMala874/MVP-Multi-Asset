@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
 from multiprocessing import Pool, cpu_count
 from pathlib import Path
 from typing import Any, Dict, List
@@ -54,6 +55,18 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--seed", type=int, default=None, help="Random seed (from config if not set)."
     )
+    parser.add_argument(
+        "--progress_every",
+        type=int,
+        default=50,
+        help="Print progress every N results.",
+    )
+    parser.add_argument(
+        "--show_eta",
+        action="store_true",
+        default=True,
+        help="Show estimated time of arrival.",
+    )
 
     args = parser.parse_args()
 
@@ -67,6 +80,44 @@ def _get_worker_count() -> int:
     """Get safe worker count: cpu_count-1, capped at 7."""
     count = max(1, cpu_count() - 1)
     return min(count, 7)
+
+
+def _format_time(seconds: float) -> str:
+    """Format seconds as HH:MM:SS."""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def _print_progress(
+    completed: int,
+    total: int,
+    elapsed: float,
+    best_result: Dict[str, Any],
+    show_eta: bool,
+) -> None:
+    """Print progress line with ETA."""
+    pct = (completed / total) * 100.0 if total > 0 else 0.0
+
+    if show_eta and completed > 0:
+        avg_time = elapsed / completed
+        eta_seconds = avg_time * (total - completed)
+        eta_str = _format_time(eta_seconds)
+    else:
+        eta_str = "N/A"
+
+    elapsed_str = _format_time(elapsed)
+    best_score = best_result.get("score_B", 0.0)
+    best_pf = best_result.get("pf_B", 0.0)
+    best_exp = best_result.get("expectancy_B", 0.0)
+
+    print(
+        f"[tuning] {completed}/{total} ({pct:.1f}%) "
+        f"elapsed={elapsed_str} eta={eta_str} "
+        f"best_score={best_score:.4f} best_pf_B={best_pf:.4f} best_exp_B={best_exp:.6f}"
+    )
+
 
 
 def _flatten_result(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -100,10 +151,21 @@ def main() -> None:
     ]
 
     results: List[Dict[str, Any]] = []
-    with Pool(processes=num_workers) as pool:
-        results = pool.starmap(run_worker, worker_inputs)
+    best_result: Dict[str, Any] = {}
+    start_time = time.time()
 
-    print(f"Evaluated {len(results)} candidates")
+    with Pool(processes=num_workers) as pool:
+        for i, result in enumerate(pool.imap_unordered(run_worker, worker_inputs), 1):
+            results.append(result)
+
+            if result.get("score_B", float("-inf")) > best_result.get("score_B", float("-inf")):
+                best_result = result
+
+            if i % args.progress_every == 0 or i == len(grid):
+                elapsed = time.time() - start_time
+                _print_progress(i, len(grid), elapsed, best_result, args.show_eta)
+
+    print(f"\nEvaluated {len(results)} candidates")
 
     df_results = pd.DataFrame([_flatten_result(r) for r in results])
     df_results = df_results.sort_values(
