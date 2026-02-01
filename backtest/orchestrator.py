@@ -28,6 +28,7 @@ STRATEGY_MAP = {
     "S2_MR_ZSCORE_EMA_REGIME": "strategies.s2_mr_zscore_ema_regime",
     "S2_TREND_EXPANSION_BREAKOUT": "strategies.s2_trend_expansion_breakout",
     "S3_BREAKOUT_ATR_REGIME_EMA200": "strategies.s3_breakout_atr_regime_ema200",
+    "S3_TS_MOM_VOL_REGIME": "strategies.s3_ts_mom_vol_regime",
 }
 
 
@@ -269,6 +270,33 @@ def _apply_strategy_features(df: pd.DataFrame, spec: _StrategySpec) -> pd.DataFr
             df["breakout_low"] = (
                 df["low"].shift(1).rolling(window=breakout_window, min_periods=breakout_window).min()
             )
+    elif spec.name == "S3_TS_MOM_VOL_REGIME":
+        # Time-series momentum strategy features
+        mom_window = int(spec.params.get("mom_window", 96))
+        atr_short_period = int(spec.params.get("atr_short_period", 14))
+        atr_long_period = int(spec.params.get("atr_long_period", 100))
+        
+        # Log returns (no shift - raw returns)
+        if "r" not in df:
+            df["r"] = np.log(df["close"]).diff()
+        
+        # Momentum signal: rolling mean of past returns (shift(1) avoids lookahead)
+        if "mom" not in df:
+            df["mom"] = df["r"].shift(1).rolling(window=mom_window, min_periods=mom_window).mean()
+        
+        # Momentum strength
+        if "mom_abs" not in df:
+            df["mom_abs"] = df["mom"].abs()
+        
+        # ATR series in price units
+        if "atr_short" not in df:
+            df["atr_short"] = atr(df, atr_short_period)
+        if "atr_long" not in df:
+            df["atr_long"] = atr(df, atr_long_period)
+        
+        # Volatility ratio
+        if "vol_ratio" not in df:
+            df["vol_ratio"] = df["atr_short"] / df["atr_long"]
     return df
 
 

@@ -92,6 +92,19 @@ strategies:
       k_trail: 3.5
       max_hold_bars: 96
       min_mfe_atr: 0.5
+    S3_TS_MOM_VOL_REGIME:
+      mom_window: 96
+      mom_th: 0.0
+      atr_short_period: 14
+      atr_long_period: 100
+      vol_ratio_th: 1.1
+      atr_min_pips: 8.0
+      allowed_vol_regimes: ["MID", "HIGH"]
+      spike_block: false
+      cooldown_bars: 8
+      k_sl: 2.5
+      min_sl_points: 8.0
+      k_trail: 3.5
 risk:
   max_hold_bars: 96
   r_base: 0.002

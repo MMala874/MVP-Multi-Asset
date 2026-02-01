@@ -67,6 +67,7 @@ def _create_s2_only_config() -> Config:
                 "S1_TREND_BREAKOUT_RETEST": {},
                 "S2_MR_ZSCORE_EMA_REGIME": {},
                 "S3_BREAKOUT_ATR_REGIME_EMA200": {},
+                "S3_TS_MOM_VOL_REGIME": {},
             }
         ),
         risk=Risk(
@@ -159,6 +160,7 @@ class TestAtrPipsRegression:
                     "S2_MR_ZSCORE_EMA_REGIME": {},
                     "S2_TREND_EXPANSION_BREAKOUT": {},
                     "S3_BREAKOUT_ATR_REGIME_EMA200": {},
+                    "S3_TS_MOM_VOL_REGIME": {},
                 }
             ),
             risk=Risk(
