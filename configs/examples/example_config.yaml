@@ -105,6 +105,24 @@ strategies:
       k_sl: 2.5
       min_sl_points: 8.0
       k_trail: 3.5
+    S3_TS_MOM_H1_FILTER:
+      # H1 filter parameters
+      ema_fast_h1: 8
+      ema_slow_h1: 21
+      adx_th_h1: 25.0
+      # M15 execution parameters
+      mom_window: 96
+      mom_th: 0.0
+      atr_short_period: 14
+      atr_long_period: 100
+      vol_ratio_th: 1.1
+      atr_min_pips: 8.0
+      allowed_vol_regimes: ["MID", "HIGH"]
+      spike_block: false
+      cooldown_bars: 8
+      k_sl: 2.5
+      min_sl_points: 8.0
+      k_trail: 3.5
 risk:
   max_hold_bars: 96
   r_base: 0.002
@@ -114,7 +132,7 @@ risk:
     usd_exposure_cap: 100000
   conflict_policy: priority
   priority_order:
-    - S1_TREND_EMA_ATR_ADX
+    - S3_TS_MOM_VOL_REGIME
   dd_day_limit: 0.02
   dd_week_limit: 0.05
   max_execution_errors: 3

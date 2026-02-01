@@ -9,7 +9,6 @@ import pytest
 from desk_types import Side
 from strategies.s3_ts_mom_vol_regime import (
     generate_signal,
-    MomSignalContext,
     required_features,
     STRATEGY_ID,
 )
@@ -49,7 +48,7 @@ def _create_simple_arrays(size=150, base_mom=0.0):
     Create simple test arrays for momentum signals.
     
     Returns:
-        dict with mom, vol_ratio, atr_pips arrays
+        dict with mom, vol_ratio, atr_pips, regime_snapshot arrays
     """
     idx_start = 50  # Valid data starts here
     
@@ -63,10 +62,33 @@ def _create_simple_arrays(size=150, base_mom=0.0):
     # Create atr_pips (constant medium value)
     atr_pips = np.full(size, 15.0)
     
+    # Create regime_snapshot array (all HIGH)
+    regime_snapshot = np.full(size, "VOL=HIGH|SPIKE=0", dtype=object)
+    
     return {
         "mom": mom.copy(),
         "vol_ratio": vol_ratio.copy(),
         "atr_pips": atr_pips.copy(),
+        "regime_snapshot": regime_snapshot.copy(),
+    }
+
+
+def _make_context(cols, idx, symbol, current_time, config=None, regime_snapshot="VOL=HIGH|SPIKE=0"):
+    """
+    Helper to create context dict for signal generation.
+    """
+    if config is not None:
+        config_dict = config.strategies.params.get("S3_TS_MOM_VOL_REGIME", {})
+    else:
+        config_dict = {}
+    
+    return {
+        "cols": cols,
+        "idx": idx,
+        "symbol": symbol,
+        "current_time": current_time,
+        "config": config_dict,
+        "regime_snapshot": regime_snapshot,
     }
 
 
@@ -92,7 +114,7 @@ def test_no_lookahead_momentum():
     idx = 100
     
     # Generate signal with original momentum
-    ctx_original = MomSignalContext(
+    ctx_original = _make_context(
         cols={
             "mom": arrays["mom"].copy(),
             "vol_ratio": arrays["vol_ratio"].copy(),
@@ -112,7 +134,7 @@ def test_no_lookahead_momentum():
     arrays_modified = _create_simple_arrays(size=150, base_mom=0.001)
     arrays_modified["mom"][idx + 10] = 0.999  # Large future change
     
-    ctx_modified = MomSignalContext(
+    ctx_modified = _make_context(
         cols={
             "mom": arrays_modified["mom"].copy(),
             "vol_ratio": arrays_modified["vol_ratio"].copy(),
@@ -140,7 +162,7 @@ def test_momentum_sanity_nan_period(mock_config):
     arrays = _create_simple_arrays(size=150)
     idx_nan = 20  # Before valid data starts (NaN region)
     
-    ctx = MomSignalContext(
+    ctx = _make_context(
         cols={
             "mom": arrays["mom"].copy(),
             "vol_ratio": arrays["vol_ratio"].copy(),
@@ -166,7 +188,7 @@ def test_signal_long_on_positive_momentum(mock_config):
     arrays = _create_simple_arrays(size=150, base_mom=0.002)
     idx = 100
     
-    ctx = MomSignalContext(
+    ctx = _make_context(
         cols={
             "mom": arrays["mom"].copy(),
             "vol_ratio": arrays["vol_ratio"].copy(),
@@ -192,7 +214,7 @@ def test_signal_short_on_negative_momentum(mock_config):
     arrays = _create_simple_arrays(size=150, base_mom=-0.002)
     idx = 100
     
-    ctx = MomSignalContext(
+    ctx = _make_context(
         cols={
             "mom": arrays["mom"].copy(),
             "vol_ratio": arrays["vol_ratio"].copy(),
@@ -218,7 +240,7 @@ def test_signal_flat_on_neutral_momentum(mock_config):
     arrays = _create_simple_arrays(size=150, base_mom=0.0)
     idx = 100
     
-    ctx = MomSignalContext(
+    ctx = _make_context(
         cols={
             "mom": arrays["mom"].copy(),
             "vol_ratio": arrays["vol_ratio"].copy(),
@@ -243,7 +265,7 @@ def test_signal_rejects_low_vol_regime(mock_config):
     arrays = _create_simple_arrays(size=150, base_mom=0.002)
     idx = 100
     
-    ctx = MomSignalContext(
+    ctx = _make_context(
         cols={
             "mom": arrays["mom"].copy(),
             "vol_ratio": arrays["vol_ratio"].copy(),
@@ -269,7 +291,7 @@ def test_signal_rejects_low_vol_ratio(mock_config):
     arrays["vol_ratio"][:] = 0.9  # Below threshold (vol_ratio_th = 1.1)
     idx = 100
     
-    ctx = MomSignalContext(
+    ctx = _make_context(
         cols={
             "mom": arrays["mom"].copy(),
             "vol_ratio": arrays["vol_ratio"].copy(),
@@ -295,7 +317,7 @@ def test_signal_rejects_low_atr_pips(mock_config):
     arrays["atr_pips"][:] = 5.0  # Below minimum (atr_min_pips = 8.0)
     idx = 100
     
-    ctx = MomSignalContext(
+    ctx = _make_context(
         cols={
             "mom": arrays["mom"].copy(),
             "vol_ratio": arrays["vol_ratio"].copy(),
@@ -322,7 +344,7 @@ def test_signal_spike_block(mock_config):
     arrays = _create_simple_arrays(size=150, base_mom=0.002)
     idx = 100
     
-    ctx = MomSignalContext(
+    ctx = _make_context(
         cols={
             "mom": arrays["mom"].copy(),
             "vol_ratio": arrays["vol_ratio"].copy(),
@@ -352,7 +374,7 @@ def test_sl_points_calculation(mock_config):
     # sl_points = max(2.5 * 15.0, 8.0) = max(37.5, 8.0) = 37.5
     expected_sl = max(2.5 * 15.0, 8.0)
     
-    ctx = MomSignalContext(
+    ctx = _make_context(
         cols={
             "mom": arrays["mom"].copy(),
             "vol_ratio": arrays["vol_ratio"].copy(),
@@ -382,7 +404,7 @@ def test_sl_points_floor_with_min(mock_config):
     # sl_points = max(2.5 * 8.5, 8.0) = max(21.25, 8.0) = 21.25
     expected_sl = max(2.5 * 8.5, 8.0)
     
-    ctx = MomSignalContext(
+    ctx = _make_context(
         cols={
             "mom": arrays["mom"].copy(),
             "vol_ratio": arrays["vol_ratio"].copy(),
@@ -407,7 +429,7 @@ def test_missing_required_column(mock_config):
     arrays = _create_simple_arrays(size=150, base_mom=0.002)
     idx = 100
     
-    ctx = MomSignalContext(
+    ctx = _make_context(
         cols={
             # Missing 'mom' column
             "vol_ratio": arrays["vol_ratio"].copy(),
@@ -432,7 +454,7 @@ def test_idx_out_of_bounds(mock_config):
     arrays = _create_simple_arrays(size=150, base_mom=0.002)
     idx = 999  # Out of bounds
     
-    ctx = MomSignalContext(
+    ctx = _make_context(
         cols={
             "mom": arrays["mom"].copy(),
             "vol_ratio": arrays["vol_ratio"].copy(),

@@ -29,6 +29,7 @@ STRATEGY_MAP = {
     "S2_TREND_EXPANSION_BREAKOUT": "strategies.s2_trend_expansion_breakout",
     "S3_BREAKOUT_ATR_REGIME_EMA200": "strategies.s3_breakout_atr_regime_ema200",
     "S3_TS_MOM_VOL_REGIME": "strategies.s3_ts_mom_vol_regime",
+    "S3_TS_MOM_H1_FILTER": "strategies.s3_ts_mom_h1_filter",
 }
 
 
@@ -297,6 +298,52 @@ def _apply_strategy_features(df: pd.DataFrame, spec: _StrategySpec) -> pd.DataFr
         # Volatility ratio
         if "vol_ratio" not in df:
             df["vol_ratio"] = df["atr_short"] / df["atr_long"]
+    elif spec.name == "S3_TS_MOM_H1_FILTER":
+        # Time-series momentum with H1 trend filter
+        # M15 features (same as S3_TS_MOM_VOL_REGIME)
+        mom_window = int(spec.params.get("mom_window", 96))
+        atr_short_period = int(spec.params.get("atr_short_period", 14))
+        atr_long_period = int(spec.params.get("atr_long_period", 100))
+        
+        # Log returns
+        if "r" not in df:
+            df["r"] = np.log(df["close"]).diff()
+        
+        # Momentum signal
+        if "mom" not in df:
+            df["mom"] = df["r"].shift(1).rolling(window=mom_window, min_periods=mom_window).mean()
+        
+        # ATR series
+        if "atr_short" not in df:
+            df["atr_short"] = atr(df, atr_short_period)
+        if "atr_long" not in df:
+            df["atr_long"] = atr(df, atr_long_period)
+        
+        # Volatility ratio
+        if "vol_ratio" not in df:
+            df["vol_ratio"] = df["atr_short"] / df["atr_long"]
+        
+        # H1 trend filter features (already merged from H1 dataframe)
+        # If missing, create dummy (trend_bias_h1 = 0 = FLAT)
+        if "ema_fast_h1" not in df:
+            df["ema_fast_h1"] = np.nan
+        if "ema_slow_h1" not in df:
+            df["ema_slow_h1"] = np.nan
+        if "adx_h1" not in df:
+            df["adx_h1"] = np.nan
+        
+        # Derive trend_bias_h1 from H1 EMA/ADX (if H1 data available)
+        if "trend_bias_h1" not in df:
+            adx_th_h1 = float(spec.params.get("adx_th_h1", 25.0))
+            df["trend_bias_h1"] = np.where(
+                (df["ema_fast_h1"] > df["ema_slow_h1"]) & (df["adx_h1"] > adx_th_h1),
+                1.0,  # LONG
+                np.where(
+                    (df["ema_fast_h1"] < df["ema_slow_h1"]) & (df["adx_h1"] > adx_th_h1),
+                    -1.0,  # SHORT
+                    0.0  # FLAT
+                )
+            )
     return df
 
 
