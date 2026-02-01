@@ -943,6 +943,13 @@ def main():
     # Create output directory
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     
+    # Initialize imputation metadata (for streaming mode compatibility)
+    imputation_meta = {
+        'ask_imputed_count': 0,
+        'ask_imputed_ratio': 0.0,
+        'median_spread_computed': None,
+    }
+    
     # Load ticks with MT5 streaming loader
     if args.tick_file and os.path.exists(args.tick_file):
         df_bars, load_stats = load_ticks(
@@ -961,8 +968,9 @@ def main():
         df_bars = build_minute_bars(ticks_df, bar_period_sec=args.bar_period_sec, verbose=args.verbose)
         load_stats = {
             'rows_read': len(ticks_df),
-            'rows_processed': len(ticks_df),
+            'rows_filtered': len(ticks_df),
             'nat_dropped': 0,
+            'chunks_skipped': 0,
             'minutes_built': len(df_bars),
             'elapsed_sec': 0,
             'rows_per_sec': 0,
@@ -1001,20 +1009,24 @@ def main():
     
     # Save events.csv
     events_csv_path = os.path.join(args.output_dir, 'events.csv')
-    df_events.to_csv(events_csv_path, index=False)
-    if args.verbose:
-        print(f"Saved events to {events_csv_path}")
+    if len(df_events) > 0:
+        df_events.to_csv(events_csv_path, index=False)
+        if args.verbose:
+            print(f"Saved events to {events_csv_path}")
     
     # Save summary.json with all metadata
+    # Use load_stats for tick counts (works in streaming and synthetic mode)
     summary = {
         'metadata': {
-            'n_ticks': len(ticks_df),
+            'n_ticks': load_stats['rows_read'],
+            'n_ticks_filtered': load_stats['rows_filtered'],
+            'n_ticks_dropped': load_stats['nat_dropped'],
             'n_bars': len(df_bars),
             'n_events': len(df_events),
             'ask_imputed_ratio': imputation_meta['ask_imputed_ratio'],
             'date_range': {
-                'start': str(df_bars['time'].min()) if len(df_bars) > 0 else None,
-                'end': str(df_bars['time'].max()) if len(df_bars) > 0 else None,
+                'start': str(load_stats['date_range'][0]) if len(df_bars) > 0 else None,
+                'end': str(load_stats['date_range'][1]) if len(df_bars) > 0 else None,
             },
         },
         'parameters': {
@@ -1047,9 +1059,9 @@ def main():
     print("TICK-LEVEL EDGE DISCOVERY - RESULTS")
     print("="*70)
     if len(df_bars) > 0:
-        print(f"\nData: {len(ticks_df):,} ticks -> {len(df_bars):,} bars")
+        print(f"\nData: {load_stats['rows_read']:,} ticks -> {load_stats['rows_filtered']:,} kept -> {len(df_bars):,} bars")
         print(f"Events detected: {len(df_events)}")
-        print(f"Date range: {df_bars['time'].min()} to {df_bars['time'].max()}")
+        print(f"Date range: {load_stats['date_range'][0]} to {load_stats['date_range'][1]}")
     else:
         print("\nNo data processed")
     
