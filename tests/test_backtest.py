@@ -59,6 +59,7 @@ def _make_config() -> Config:
                 "S2_TREND_EXPANSION_BREAKOUT": {},
                 "S3_BREAKOUT_ATR_REGIME_EMA200": {},
                 "S3_TS_MOM_VOL_REGIME": {},
+                "S3_TS_MOM_H1_FILTER": {},
             },
         ),
         risk=Risk(

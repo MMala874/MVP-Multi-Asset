@@ -630,6 +630,15 @@ def _run_scenario(
                             held_bars = (idx + 1) - position["entry_idx"]
                             if held_bars >= config.risk.max_hold_bars:
                                 exit_reason = "TIME"
+                    
+                    # Re-label SL as TRAIL if exit is profitable (stop moved into profit)
+                    if exit_reason == "SL":
+                        entry_raw_check = float(position["entry_price_raw"])
+                        exit_raw_check = float(exit_price_raw)
+                        if position["current_side"] == Side.LONG and exit_raw_check > entry_raw_check:
+                            exit_reason = "TRAIL"
+                        elif position["current_side"] == Side.SHORT and exit_raw_check < entry_raw_check:
+                            exit_reason = "TRAIL"
 
                     pip = PIP_SIZES.get(symbol, 0.0001)
                     pip_size = PIP_SIZES.get(symbol, 0.0001)
@@ -662,8 +671,10 @@ def _run_scenario(
                             "signal_idx": position["signal_idx"],
                             "fill_time": position["entry_time"],
                             "entry_price": position["entry_price_adj"],
+                            "entry_price_raw": float(position["entry_price_raw"]),
                             "exit_time": exit_time,
                             "exit_price": exit_price_adj,
+                            "exit_price_raw": exit_price_raw,
                             "pnl": pnl,
                             "pnl_pct": pnl_pct,
                             "spread_used": position["spread_used"],
@@ -782,6 +793,7 @@ def _run_scenario(
                 position = {
                     "current_side": order.side,
                     "entry_price": entry_price,
+                    "entry_price_raw": entry_price,
                     "entry_time": _resolve_time(df, idx + 1),
                     "entry_idx": idx,
                     "entry_price_adj": entry_price_adj,
