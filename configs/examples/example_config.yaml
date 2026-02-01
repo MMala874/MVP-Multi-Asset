@@ -106,9 +106,10 @@ strategies:
       min_sl_points: 8.0
       k_trail: 3.5
     S3_TS_MOM_H1_FILTER:
-      # H1 filter parameters
+      # H1 filter parameters (no-lookahead: features shift(1) before merge)
       ema_fast_h1: 8
       ema_slow_h1: 21
+      adx_period_h1: 14
       adx_th_h1: 25.0
       # M15 execution parameters
       mom_window: 96

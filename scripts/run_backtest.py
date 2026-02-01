@@ -46,22 +46,46 @@ def _parse_args() -> argparse.Namespace:
     return args
 
 
-def _load_symbols(args: argparse.Namespace) -> Dict[str, pd.DataFrame]:
+def _load_symbols(args: argparse.Namespace, cfg) -> Dict[str, pd.DataFrame]:
+    """Load M15 data and optionally merge H1 filter using config-driven parameters."""
     df_by_symbol: Dict[str, pd.DataFrame] = {}
     mapping = {
         "EURUSD": (args.eurusd, args.eurusd_h1),
         "GBPUSD": (args.gbpusd, args.gbpusd_h1),
         "USDJPY": (args.usdjpy, args.usdjpy_h1),
     }
+    
+    # Detect which enabled strategy needs H1 filter
+    h1_needed_strategy = None
+    h1_params = {}
+    for strategy_id in cfg.strategies.enabled:
+        if "H1_FILTER" in strategy_id or strategy_id == "S3_TS_MOM_H1_FILTER":
+            h1_needed_strategy = strategy_id
+            # Read H1 params from config
+            strategy_params = cfg.strategies.params.get(strategy_id, {})
+            h1_params = {
+                "ema_fast": int(strategy_params.get("ema_fast_h1", 50)),
+                "ema_slow": int(strategy_params.get("ema_slow_h1", 200)),
+                "adx_th": float(strategy_params.get("adx_th_h1", 20.0)),
+                "adx_period": int(strategy_params.get("adx_period_h1", 14)),
+            }
+            break
+    
     for symbol, (path_m15, path_h1) in mapping.items():
         if path_m15:
             df_m15 = load_ohlc_csv(path_m15)
-            # Optionally merge H1 filter
-            if path_h1:
+            # Optionally merge H1 filter if strategy needs it and H1 data provided
+            if h1_needed_strategy and path_h1:
                 df_h1 = load_ohlc_csv(path_h1)
-                # Prepare H1 features before merge
-                # Default params: ema_fast=8, ema_slow=21, adx_th=25.0, adx_period=14
-                df_h1 = prepare_h1_features(df_h1, ema_fast=8, ema_slow=21, adx_th=25.0, adx_period=14)
+                # Prepare H1 features with config-driven params
+                # prepare_h1_features handles shift(1) for no-lookahead internally
+                df_h1 = prepare_h1_features(
+                    df_h1,
+                    ema_fast=h1_params["ema_fast"],
+                    ema_slow=h1_params["ema_slow"],
+                    adx_th=h1_params["adx_th"],
+                    adx_period=h1_params["adx_period"],
+                )
                 df_m15 = merge_h1_to_m15(df_m15, df_h1)
             df_by_symbol[symbol] = df_m15
     return df_by_symbol
@@ -78,7 +102,7 @@ def _print_summary(trades: pd.DataFrame, report: Dict[str, object]) -> None:
 def main() -> None:
     args = _parse_args()
     cfg = load_config(args.config)
-    df_by_symbol = _load_symbols(args)
+    df_by_symbol = _load_symbols(args, cfg)
 
     orchestrator = BacktestOrchestrator()
     trades, report = orchestrator.run(df_by_symbol, cfg)

@@ -23,15 +23,17 @@ def load_ohlc_csv(path: str | Path) -> pd.DataFrame:
 
 def merge_h1_to_m15(df_m15: pd.DataFrame, df_h1: pd.DataFrame) -> pd.DataFrame:
     """
-    Merge H1 features to M15 dataframe with forward-fill, NO LOOKAHEAD.
+    Merge H1 features to M15 dataframe with backward merge_asof + forward-fill, NO LOOKAHEAD.
     
-    H1 features are:
+    H1 features (all shift(1) before merge to ensure closed-bar-only):
     - ema_fast_h1
     - ema_slow_h1
     - adx_h1
     - trend_bias_h1
     
-    Merge via 'time' column, forward-fill gaps, ensure no future H1 data visible.
+    Double guarantee: prepare_h1_features() shift(1) + merge_asof(direction='backward')
+    ensures M15 rows NEVER see current or future H1 bar data, even if timestamps are bar-open.
+    Forward-fill used only for start-of-data gaps (safe, no forward injection).
     """
     df = df_m15.copy()
     
@@ -62,19 +64,24 @@ def merge_h1_to_m15(df_m15: pd.DataFrame, df_h1: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def prepare_h1_features(df_h1: pd.DataFrame, ema_fast: int = 8, ema_slow: int = 21, adx_th: float = 25.0, adx_period: int = 14) -> pd.DataFrame:
+def prepare_h1_features(df_h1: pd.DataFrame, ema_fast: int = 50, ema_slow: int = 200, adx_th: float = 20.0, adx_period: int = 14) -> pd.DataFrame:
     """
     Compute H1 trend filter features: EMA, ADX, trend_bias.
     
+    CRITICAL: Features are shifted by 1 bar BEFORE returning to ensure no-lookahead.
+    This guarantees M15 rows only see the last fully closed H1 bar, even if timestamps
+    represent bar-open times.
+    
     Args:
         df_h1: H1 OHLC dataframe (raw)
-        ema_fast: Fast EMA period (default 8)
-        ema_slow: Slow EMA period (default 21)
-        adx_th: ADX threshold for trend strength (default 25.0)
+        ema_fast: Fast EMA period (default 50)
+        ema_slow: Slow EMA period (default 200)
+        adx_th: ADX threshold for trend strength (default 20.0)
         adx_period: ADX period (default 14)
     
     Returns:
         H1 dataframe with columns: [time, ema_fast_h1, ema_slow_h1, adx_h1, trend_bias_h1]
+        All features are shift(1) to ensure they represent CLOSED bars only.
     """
     df = df_h1.copy()
     
@@ -98,6 +105,12 @@ def prepare_h1_features(df_h1: pd.DataFrame, ema_fast: int = 8, ema_slow: int = 
             0.0  # FLAT
         )
     )
+    
+    # ANTI-LOOKAHEAD: Shift all H1 features by 1 bar so M15 only sees closed H1 bars
+    # If timestamps are bar-open times, shift(1) ensures we never use current bar's data
+    h1_feature_cols = ["ema_fast_h1", "ema_slow_h1", "adx_h1", "trend_bias_h1"]
+    for col in h1_feature_cols:
+        df[col] = df[col].shift(1)
     
     # Return only required columns for merge
     return df[["time", "ema_fast_h1", "ema_slow_h1", "adx_h1", "trend_bias_h1"]].copy()
