@@ -377,6 +377,7 @@ def _run_scenario(
             "highest_high_since_entry": None,
             "lowest_low_since_entry": None,
         }
+        last_exit_idx = -999  # Track last exit bar for cooldown
         cols = {col: df[col].to_numpy() for col in df.columns}
         if "time" not in cols:
             if "timestamp" in df.columns:
@@ -408,8 +409,48 @@ def _run_scenario(
                     elif tp_hit:
                         exit_price_raw = tp_price
                 
-                # Update trailing stop for S2_TREND_EXPANSION_BREAKOUT (Chandelier-style)
-                if exit_price_raw is None and position["strategy_id"] == "S2_TREND_EXPANSION_BREAKOUT":
+                # Update trailing stop for strategies with tp_points=None (trend mode)
+                # This implements generic Chandelier-style trailing stops
+                if exit_price_raw is None and position["tp_price"] is None:
+                    k_trail = float(config.strategies.params.get(position["strategy_id"], {}).get("k_trail", 3.5))
+                    
+                    # Update highest/lowest since entry
+                    if position["highest_high_since_entry"] is None:
+                        position["highest_high_since_entry"] = high
+                    else:
+                        position["highest_high_since_entry"] = max(position["highest_high_since_entry"], high)
+                    
+                    if position["lowest_low_since_entry"] is None:
+                        position["lowest_low_since_entry"] = low
+                    else:
+                        position["lowest_low_since_entry"] = min(position["lowest_low_since_entry"], low)
+                    
+                    # Compute trailing stop (use atr_short if available, else atr)
+                    atr_short = float(df["atr_short"].iat[idx + 1]) if "atr_short" in df else float(df["atr"].iat[idx + 1]) if "atr" in df else None
+                    if atr_short is not None and atr_short > 0:
+                        if position["current_side"] == Side.LONG:
+                            trail_stop = position["highest_high_since_entry"] - (k_trail * atr_short)
+                            # Tighten stop if trailing is better
+                            if position["sl_price"] is not None:
+                                position["sl_price"] = max(position["sl_price"], trail_stop)
+                            else:
+                                position["sl_price"] = trail_stop
+                            # Check if trailing stop hit
+                            if low <= position["sl_price"]:
+                                exit_price_raw = position["sl_price"]
+                        elif position["current_side"] == Side.SHORT:
+                            trail_stop = position["lowest_low_since_entry"] + (k_trail * atr_short)
+                            # Tighten stop if trailing is better
+                            if position["sl_price"] is not None:
+                                position["sl_price"] = min(position["sl_price"], trail_stop)
+                            else:
+                                position["sl_price"] = trail_stop
+                            # Check if trailing stop hit
+                            if high >= position["sl_price"]:
+                                exit_price_raw = position["sl_price"]
+                
+                # OLD S2-specific trailing logic (kept for backward compat during transition)
+                elif exit_price_raw is None and position["strategy_id"] == "S2_TREND_EXPANSION_BREAKOUT" and position["tp_price"] is not None:
                     k_trail = float(config.strategies.params.get(position["strategy_id"], {}).get("k_trail", 3.5))
                     
                     # Update highest/lowest since entry
@@ -504,7 +545,31 @@ def _run_scenario(
                         else 0.0
                     )
                     exit_reason = "EOD"
-                    if position["current_side"] == Side.LONG:
+                    
+                    # Detect if this was a trailing stop exit (for trend strategies with tp_price=None)
+                    trail_exit = False
+                    if position["tp_price"] is None and position["highest_high_since_entry"] is not None and position["lowest_low_since_entry"] is not None:
+                        # Check if the exit was from trailing stop (not initial SL or TP)
+                        if position["current_side"] == Side.LONG and sl_hit and not tp_hit:
+                            k_trail = float(config.strategies.params.get(position["strategy_id"], {}).get("k_trail", 3.5))
+                            atr_short = float(df["atr_short"].iat[idx + 1]) if "atr_short" in df else float(df["atr"].iat[idx + 1]) if "atr" in df else None
+                            if atr_short is not None and atr_short > 0:
+                                trail_stop = position["highest_high_since_entry"] - (k_trail * atr_short)
+                                # If exit price matches trailing stop (within floating point tolerance)
+                                if abs(float(exit_price_raw) - trail_stop) < 1e-6:
+                                    trail_exit = True
+                        elif position["current_side"] == Side.SHORT and sl_hit and not tp_hit:
+                            k_trail = float(config.strategies.params.get(position["strategy_id"], {}).get("k_trail", 3.5))
+                            atr_short = float(df["atr_short"].iat[idx + 1]) if "atr_short" in df else float(df["atr"].iat[idx + 1]) if "atr" in df else None
+                            if atr_short is not None and atr_short > 0:
+                                trail_stop = position["lowest_low_since_entry"] + (k_trail * atr_short)
+                                # If exit price matches trailing stop (within floating point tolerance)
+                                if abs(float(exit_price_raw) - trail_stop) < 1e-6:
+                                    trail_exit = True
+                    
+                    if trail_exit:
+                        exit_reason = "TRAIL"
+                    elif position["current_side"] == Side.LONG:
                         if sl_hit: exit_reason = "SL"
                         elif tp_hit: exit_reason = "TP"
                         else:
@@ -569,6 +634,10 @@ def _run_scenario(
                         }
                     )
                     trade_id += 1
+                    
+                    # Track the last exit index for cooldown enforcement
+                    last_exit_idx = idx
+                    
                     position = {
                         "current_side": Side.FLAT,
                         "entry_price": None,
@@ -623,6 +692,12 @@ def _run_scenario(
             orders = allocator.allocate(filtered, state)
 
             for order in orders:
+                # Check cooldown enforcement for trend strategies
+                cooldown_bars = float(config.strategies.params.get(order.strategy_id, {}).get("cooldown_bars", 0))
+                if cooldown_bars > 0 and idx - last_exit_idx < cooldown_bars:
+                    # Skip entry during cooldown period
+                    continue
+                
                 entry_price = get_fill_price(df, idx_t=idx, side=order.side.value)
                 spread_used = cost_model.spread_pips(symbol, scenario)
                 slippage_used = cost_model.slippage_pips(df, idx, symbol, df["atr"], scenario)
