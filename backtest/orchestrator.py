@@ -343,6 +343,8 @@ def _run_scenario(
             "entry_cost_pips": None,
             "exit_cost_pips": None,
             "reason_codes": None,
+            "highest_high_since_entry": None,
+            "lowest_low_since_entry": None,
         }
         cols = {col: df[col].to_numpy() for col in df.columns}
         if "time" not in cols:
@@ -374,12 +376,69 @@ def _run_scenario(
                         exit_price_raw = sl_price
                     elif tp_hit:
                         exit_price_raw = tp_price
+                
+                # Update trailing stop for S2_TREND_EXPANSION_BREAKOUT (Chandelier-style)
+                if exit_price_raw is None and position["strategy_id"] == "S2_TREND_EXPANSION_BREAKOUT":
+                    k_trail = float(config.strategies.params.get(position["strategy_id"], {}).get("k_trail", 3.5))
+                    
+                    # Update highest/lowest since entry
+                    if position["highest_high_since_entry"] is None:
+                        position["highest_high_since_entry"] = high
+                    else:
+                        position["highest_high_since_entry"] = max(position["highest_high_since_entry"], high)
+                    
+                    if position["lowest_low_since_entry"] is None:
+                        position["lowest_low_since_entry"] = low
+                    else:
+                        position["lowest_low_since_entry"] = min(position["lowest_low_since_entry"], low)
+                    
+                    # Compute trailing stop
+                    atr_short = float(df["atr_short"].iat[idx + 1]) if "atr_short" in df else None
+                    if atr_short is not None and atr_short > 0:
+                        if position["current_side"] == Side.LONG:
+                            trail_stop = position["highest_high_since_entry"] - (k_trail * atr_short)
+                            # Tighten stop if trailing is better
+                            if position["sl_price"] is not None:
+                                position["sl_price"] = max(position["sl_price"], trail_stop)
+                            else:
+                                position["sl_price"] = trail_stop
+                            # Check if trailing stop hit
+                            if low <= position["sl_price"]:
+                                exit_price_raw = position["sl_price"]
+                        elif position["current_side"] == Side.SHORT:
+                            trail_stop = position["lowest_low_since_entry"] + (k_trail * atr_short)
+                            # Tighten stop if trailing is better
+                            if position["sl_price"] is not None:
+                                position["sl_price"] = min(position["sl_price"], trail_stop)
+                            else:
+                                position["sl_price"] = trail_stop
+                            # Check if trailing stop hit
+                            if high >= position["sl_price"]:
+                                exit_price_raw = position["sl_price"]
+                
                 # Check TIME stop (max hold bars exceeded)
                 if exit_price_raw is None:
                     held_bars = (idx + 1) - position["entry_idx"]
                     max_hold_bars = config.risk.max_hold_bars
                     if held_bars >= max_hold_bars:
-                        exit_price_raw = float(df["close"].iat[idx + 1])
+                        # For S2, check MFE guard before exiting on TIME
+                        if position["strategy_id"] == "S2_TREND_EXPANSION_BREAKOUT":
+                            min_mfe_atr = float(config.strategies.params.get(position["strategy_id"], {}).get("min_mfe_atr", 0.5))
+                            entry_price = float(position["entry_price"])
+                            atr_short_entry = float(df["atr_short"].iat[position["entry_idx"]]) if "atr_short" in df else None
+                            if atr_short_entry and atr_short_entry > 0:
+                                if position["current_side"] == Side.LONG:
+                                    mfe_price = position["highest_high_since_entry"]
+                                    mfe_atr = (mfe_price - entry_price) / atr_short_entry
+                                    if mfe_atr >= min_mfe_atr:
+                                        exit_price_raw = float(df["close"].iat[idx + 1])
+                                elif position["current_side"] == Side.SHORT:
+                                    mfe_price = position["lowest_low_since_entry"]
+                                    mfe_atr = (entry_price - mfe_price) / atr_short_entry
+                                    if mfe_atr >= min_mfe_atr:
+                                        exit_price_raw = float(df["close"].iat[idx + 1])
+                        else:
+                            exit_price_raw = float(df["close"].iat[idx + 1])
                 # End-of-data exit
                 if exit_price_raw is None and (idx + 1) == (len(df) - 1):
                     exit_price_raw = float(df["close"].iat[idx + 1])
@@ -494,6 +553,8 @@ def _run_scenario(
                         "spread_used": None,
                         "slippage_used": None,
                         "reason_codes": None,
+                        "highest_high_since_entry": None,
+                        "lowest_low_since_entry": None,
                     }
                 continue
             signal_time = _resolve_time(df, idx)
@@ -582,6 +643,8 @@ def _run_scenario(
                     "entry_cost_pips": entry_cost,
                     "exit_cost_pips": None,
                     "reason_codes": reason_codes,
+                    "highest_high_since_entry": float(df["high"].iat[idx + 1]),
+                    "lowest_low_since_entry": float(df["low"].iat[idx + 1]),
                 }
                 break
 

@@ -26,7 +26,7 @@ import numpy as np
 
 from desk_types import Side, SignalIntent
 
-STRATEGY_ID = "s2_trend_expansion_breakout"
+STRATEGY_ID = "S2_TREND_EXPANSION_BREAKOUT"
 
 
 def required_features() -> Set[str]:

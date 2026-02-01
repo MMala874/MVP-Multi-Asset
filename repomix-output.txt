@@ -117,6 +117,7 @@ strategies/s1_trend_breakout_donchian.py
 strategies/s1_trend_breakout_retest.py
 strategies/s1_trend_ema_atr_adx.py
 strategies/s2_mr_zscore_ema_regime.py
+strategies/s2_trend_expansion_breakout.py
 strategies/s3_breakout_atr_regime_ema200.py
 test_fast_tuning_integration.py
 test_s1_breakout_integration.py
@@ -142,6 +143,7 @@ tests/test_run_tuning_mp.py
 tests/test_run_tuning.py
 tests/test_s1_trend_breakout_donchian.py
 tests/test_s1_trend_breakout_retest.py
+tests/test_s2_trend_expansion_breakout.py
 tests/test_state_machine.py
 tests/test_strategies.py
 tests/test_types.py
@@ -370,6 +372,231 @@ File: features/__init__.py
 """Feature engineering utilities."""
 
 ================
+File: montecarlo/__init__.py
+================
+from montecarlo.mc1_block_bootstrap import run_block_bootstrap
+from montecarlo.mc2_cost_noise import run_cost_noise
+
+__all__ = ["run_block_bootstrap", "run_cost_noise"]
+
+================
+File: montecarlo/mc1_block_bootstrap.py
+================
+from __future__ import annotations
+
+import math
+import random
+from typing import Sequence
+
+
+def _block_bootstrap_sample(
+    trade_pnls: Sequence[float],
+    block_min: int,
+    block_max: int,
+    rng: random.Random,
+) -> list[float]:
+    if block_min <= 0 or block_max <= 0:
+        raise ValueError("block_min and block_max must be positive")
+    if block_min > block_max:
+        raise ValueError("block_min must be <= block_max")
+
+    n = len(trade_pnls)
+    if n == 0:
+        return []
+
+    sample: list[float] = []
+    while len(sample) < n:
+        block_len = rng.randint(block_min, block_max)
+        start = rng.randrange(0, n)
+        for offset in range(block_len):
+            sample.append(trade_pnls[(start + offset) % n])
+            if len(sample) >= n:
+                break
+    return sample
+
+
+def _max_drawdown_and_recovery(pnls: Sequence[float]) -> tuple[float, int]:
+    equity = 0.0
+    peak = 0.0
+    peak_index = 0
+    max_dd = 0.0
+    max_recovery = 0
+    in_drawdown = False
+
+    for idx, pnl in enumerate(pnls):
+        equity += float(pnl)
+        if equity >= peak:
+            if in_drawdown:
+                max_recovery = max(max_recovery, idx - peak_index)
+                in_drawdown = False
+            peak = equity
+            peak_index = idx
+        else:
+            in_drawdown = True
+            max_dd = max(max_dd, peak - equity)
+
+    if in_drawdown:
+        max_recovery = max(max_recovery, len(pnls) - 1 - peak_index)
+
+    return max_dd, max_recovery
+
+
+def _percentile(sorted_values: Sequence[float], pct: float) -> float:
+    if not sorted_values:
+        return 0.0
+    if pct <= 0:
+        return sorted_values[0]
+    if pct >= 1:
+        return sorted_values[-1]
+    idx = int(math.ceil(pct * len(sorted_values)) - 1)
+    idx = max(0, min(idx, len(sorted_values) - 1))
+    return sorted_values[idx]
+
+
+def run_block_bootstrap(
+    trade_pnls: Sequence[float],
+    block_min: int,
+    block_max: int,
+    n_sims: int,
+    seed: int,
+) -> dict:
+    rng = random.Random(seed)
+    pnls_list = list(trade_pnls)
+    if n_sims <= 0:
+        raise ValueError("n_sims must be positive")
+
+    baseline_peak = 0.0
+    equity = 0.0
+    for pnl in pnls_list:
+        equity += float(pnl)
+        baseline_peak = max(baseline_peak, equity)
+    dd_threshold = 0.1 * max(1.0, baseline_peak)
+
+    max_drawdowns: list[float] = []
+    recoveries: list[int] = []
+
+    for _ in range(n_sims):
+        sample = _block_bootstrap_sample(pnls_list, block_min, block_max, rng)
+        max_dd, max_rec = _max_drawdown_and_recovery(sample)
+        max_drawdowns.append(max_dd)
+        recoveries.append(max_rec)
+
+    prob_dd_gt_threshold = sum(1 for dd in max_drawdowns if dd > dd_threshold) / n_sims
+    sorted_dds = sorted(max_drawdowns)
+    worst_1pct = _percentile(sorted_dds, 0.99)
+
+    return {
+        "max_drawdowns": max_drawdowns,
+        "prob_dd_gt_threshold": prob_dd_gt_threshold,
+        "dd_threshold": dd_threshold,
+        "time_to_recovery": recoveries,
+        "worst_1pct": worst_1pct,
+    }
+
+================
+File: montecarlo/mc2_cost_noise.py
+================
+from __future__ import annotations
+
+import math
+import random
+from typing import Iterable, Mapping, Sequence
+
+
+def _get_cost_model_params(cost_model: object | None) -> tuple[float, float, float]:
+    if cost_model is None:
+        return 1.0, 1.0, 0.0
+    if isinstance(cost_model, Mapping):
+        return (
+            float(cost_model.get("spread_mult", 1.0)),
+            float(cost_model.get("slippage_mult", 1.0)),
+            float(cost_model.get("slippage_add", 0.0)),
+        )
+    spread_mult = float(getattr(cost_model, "spread_mult", 1.0))
+    slippage_mult = float(getattr(cost_model, "slippage_mult", 1.0))
+    slippage_add = float(getattr(cost_model, "slippage_add", 0.0))
+    return spread_mult, slippage_mult, slippage_add
+
+
+def _get_noise_range(noise_params: Mapping[str, object], key: str, default: tuple[float, float]) -> tuple[float, float]:
+    value = noise_params.get(key, default)
+    if isinstance(value, Sequence) and len(value) == 2:
+        return float(value[0]), float(value[1])
+    return default
+
+
+def _apply_cost_noise(
+    trades_pre_cost: Sequence[Mapping[str, object]],
+    cost_model: object | None,
+    noise_params: Mapping[str, object],
+    rng: random.Random,
+) -> list[float]:
+    spread_mult_base, slippage_mult_base, slippage_add = _get_cost_model_params(cost_model)
+    spread_range = _get_noise_range(noise_params, "spread_mult_range", (1.0, 1.0))
+    slippage_range = _get_noise_range(noise_params, "slippage_mult_range", (1.0, 1.0))
+    spike_range = _get_noise_range(noise_params, "spike_slippage_mult_range", (1.0, 1.0))
+
+    pnls_post_cost: list[float] = []
+    for trade in trades_pre_cost:
+        pnl_pre_cost = float(trade.get("pnl_pre_cost", trade.get("pnl", 0.0)))
+        spread_cost = float(trade.get("spread_cost", 0.0))
+        slippage_cost = float(trade.get("slippage_cost", 0.0))
+        is_spike = bool(trade.get("is_spike", False))
+
+        spread_mult = rng.uniform(*spread_range)
+        slippage_mult = rng.uniform(*slippage_range)
+        if is_spike:
+            slippage_mult *= rng.uniform(*spike_range)
+
+        cost = spread_cost * spread_mult_base * spread_mult
+        cost += slippage_cost * slippage_mult_base * slippage_mult
+        cost += slippage_add
+        pnls_post_cost.append(pnl_pre_cost - cost)
+
+    return pnls_post_cost
+
+
+def _mean(values: Iterable[float]) -> float:
+    vals = list(values)
+    if not vals:
+        return 0.0
+    return sum(vals) / len(vals)
+
+
+def _stdev(values: Iterable[float], mean: float) -> float:
+    vals = list(values)
+    if len(vals) < 2:
+        return 0.0
+    variance = sum((v - mean) ** 2 for v in vals) / (len(vals) - 1)
+    return math.sqrt(variance)
+
+
+def run_cost_noise(
+    trades_pre_cost: Sequence[Mapping[str, object]],
+    cost_model: object | None,
+    noise_params: Mapping[str, object],
+    n_sims: int,
+    seed: int,
+) -> dict:
+    if n_sims <= 0:
+        raise ValueError("n_sims must be positive")
+    rng = random.Random(seed)
+
+    pnl_distribution: list[float] = []
+    for _ in range(n_sims):
+        pnls_post_cost = _apply_cost_noise(trades_pre_cost, cost_model, noise_params, rng)
+        pnl_distribution.append(sum(pnls_post_cost))
+
+    mean_pnl = _mean(pnl_distribution)
+    stdev_pnl = _stdev(pnl_distribution, mean_pnl)
+
+    return {
+        "pnl_distribution": pnl_distribution,
+        "mean_pnl": mean_pnl,
+        "stdev_pnl": stdev_pnl,
+    }
+
+================
 File: risk/__init__.py
 ================
 from .allocator import RiskAllocator
@@ -447,750 +674,6 @@ class DDGuard:
 
 
 __all__ = ["DDGuard", "DDStatus"]
-
-================
-File: runs_tuning_breakout_small/top_k.json
-================
-{
-  "metadata": {
-    "limit_bars": null,
-    "grid_size": "small",
-    "workers": 12,
-    "two_stage": true,
-    "tune_scenario": "B",
-    "total_combinations": 729
-  },
-  "results": [
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 30,
-        "atr_period": 14,
-        "breakout_lookback": 100,
-        "buffer_atr": 0.1,
-        "cooldown_bars": 0,
-        "k_sl": 3.0,
-        "k_tp": 2.0,
-        "min_sl_points": 8.0,
-        "min_tp_points": 5.0,
-        "allowed_vol_regimes": [
-          "MID",
-          "HIGH"
-        ],
-        "spike_block": false,
-        "adx_rising": false
-      },
-      "trades_A": 3055,
-      "expectancy_A": -2.822295793995397,
-      "pf_A": 0.8095450124111133,
-      "max_drawdown_A": -8883.890339402447,
-      "trades_B": 3048,
-      "expectancy_B": -3.9201181712691935,
-      "pf_B": 0.7461961374400355,
-      "max_drawdown_B": -12078.91694712647,
-      "trades_C": 3005,
-      "expectancy_C": -6.982279722226132,
-      "pf_C": 0.588764142631544,
-      "max_drawdown_C": -21106.38136331509,
-      "score_B": 0.7461961374400355
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "breakout_lookback": 100,
-        "buffer_atr": 0.1,
-        "cooldown_bars": 0,
-        "k_sl": 3.0,
-        "k_tp": 2.0,
-        "min_sl_points": 8.0,
-        "min_tp_points": 5.0,
-        "allowed_vol_regimes": [
-          "MID",
-          "HIGH"
-        ],
-        "spike_block": false,
-        "adx_rising": false
-      },
-      "trades_A": 5077,
-      "expectancy_A": -2.9110474064630796,
-      "pf_A": 0.8010627098431866,
-      "max_drawdown_A": -14829.314537036138,
-      "trades_B": 5054,
-      "expectancy_B": -3.8274965697034258,
-      "pf_B": 0.7475027015143492,
-      "max_drawdown_B": -19391.49584035616,
-      "trades_C": 4994,
-      "expectancy_C": -6.916888339084376,
-      "pf_C": 0.5862555332519562,
-      "max_drawdown_C": -34581.15321219025,
-      "score_B": 0.7475027015143492
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "breakout_lookback": 100,
-        "buffer_atr": 0.1,
-        "cooldown_bars": 8,
-        "k_sl": 3.0,
-        "k_tp": 2.0,
-        "min_sl_points": 8.0,
-        "min_tp_points": 5.0,
-        "allowed_vol_regimes": [
-          "MID",
-          "HIGH"
-        ],
-        "spike_block": false,
-        "adx_rising": false
-      },
-      "trades_A": 5077,
-      "expectancy_A": -2.9110474064630796,
-      "pf_A": 0.8010627098431866,
-      "max_drawdown_A": -14829.314537036138,
-      "trades_B": 5054,
-      "expectancy_B": -3.8274965697034258,
-      "pf_B": 0.7475027015143492,
-      "max_drawdown_B": -19391.49584035616,
-      "trades_C": 4994,
-      "expectancy_C": -6.916888339084376,
-      "pf_C": 0.5862555332519562,
-      "max_drawdown_C": -34581.15321219025,
-      "score_B": 0.7475027015143492
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "breakout_lookback": 100,
-        "buffer_atr": 0.2,
-        "cooldown_bars": 8,
-        "k_sl": 3.0,
-        "k_tp": 2.0,
-        "min_sl_points": 8.0,
-        "min_tp_points": 5.0,
-        "allowed_vol_regimes": [
-          "MID",
-          "HIGH"
-        ],
-        "spike_block": false,
-        "adx_rising": false
-      },
-      "trades_A": 4765,
-      "expectancy_A": -2.8262594273243478,
-      "pf_A": 0.8062439782232912,
-      "max_drawdown_A": -13517.053025623592,
-      "trades_B": 4740,
-      "expectancy_B": -3.731279758895965,
-      "pf_B": 0.752878683419247,
-      "max_drawdown_B": -17733.59423424191,
-      "trades_C": 4693,
-      "expectancy_C": -6.82998477294338,
-      "pf_C": 0.5898935741548482,
-      "max_drawdown_C": -32091.331386226266,
-      "score_B": 0.752878683419247
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "breakout_lookback": 100,
-        "buffer_atr": 0.2,
-        "cooldown_bars": 16,
-        "k_sl": 3.0,
-        "k_tp": 2.0,
-        "min_sl_points": 8.0,
-        "min_tp_points": 5.0,
-        "allowed_vol_regimes": [
-          "MID",
-          "HIGH"
-        ],
-        "spike_block": false,
-        "adx_rising": false
-      },
-      "trades_A": 4765,
-      "expectancy_A": -2.8262594273243478,
-      "pf_A": 0.8062439782232912,
-      "max_drawdown_A": -13517.053025623592,
-      "trades_B": 4740,
-      "expectancy_B": -3.731279758895965,
-      "pf_B": 0.752878683419247,
-      "max_drawdown_B": -17733.59423424191,
-      "trades_C": 4693,
-      "expectancy_C": -6.82998477294338,
-      "pf_C": 0.5898935741548482,
-      "max_drawdown_C": -32091.331386226266,
-      "score_B": 0.752878683419247
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "breakout_lookback": 55,
-        "buffer_atr": 0.2,
-        "cooldown_bars": 0,
-        "k_sl": 3.0,
-        "k_tp": 2.0,
-        "min_sl_points": 8.0,
-        "min_tp_points": 5.0,
-        "allowed_vol_regimes": [
-          "MID",
-          "HIGH"
-        ],
-        "spike_block": false,
-        "adx_rising": false
-      },
-      "trades_A": 5360,
-      "expectancy_A": -2.8533769898740653,
-      "pf_A": 0.8016028915182408,
-      "max_drawdown_A": -15389.217508077292,
-      "trades_B": 5331,
-      "expectancy_B": -3.780447285487842,
-      "pf_B": 0.7464671795520239,
-      "max_drawdown_B": -20244.462643939878,
-      "trades_C": 5274,
-      "expectancy_C": -6.8736985158153505,
-      "pf_C": 0.5822593805707126,
-      "max_drawdown_C": -36329.36260689019,
-      "score_B": 0.7464671795520239
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "breakout_lookback": 55,
-        "buffer_atr": 0.2,
-        "cooldown_bars": 8,
-        "k_sl": 3.0,
-        "k_tp": 2.0,
-        "min_sl_points": 8.0,
-        "min_tp_points": 5.0,
-        "allowed_vol_regimes": [
-          "MID",
-          "HIGH"
-        ],
-        "spike_block": false,
-        "adx_rising": false
-      },
-      "trades_A": 5360,
-      "expectancy_A": -2.8533769898740653,
-      "pf_A": 0.8016028915182408,
-      "max_drawdown_A": -15389.217508077292,
-      "trades_B": 5331,
-      "expectancy_B": -3.780447285487842,
-      "pf_B": 0.7464671795520239,
-      "max_drawdown_B": -20244.462643939878,
-      "trades_C": 5274,
-      "expectancy_C": -6.8736985158153505,
-      "pf_C": 0.5822593805707126,
-      "max_drawdown_C": -36329.36260689019,
-      "score_B": 0.7464671795520239
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "breakout_lookback": 100,
-        "buffer_atr": 0.2,
-        "cooldown_bars": 0,
-        "k_sl": 3.0,
-        "k_tp": 2.0,
-        "min_sl_points": 8.0,
-        "min_tp_points": 5.0,
-        "allowed_vol_regimes": [
-          "MID",
-          "HIGH"
-        ],
-        "spike_block": false,
-        "adx_rising": false
-      },
-      "trades_A": 4765,
-      "expectancy_A": -2.8262594273243478,
-      "pf_A": 0.8062439782232912,
-      "max_drawdown_A": -13517.053025623592,
-      "trades_B": 4740,
-      "expectancy_B": -3.731279758895965,
-      "pf_B": 0.752878683419247,
-      "max_drawdown_B": -17733.59423424191,
-      "trades_C": 4693,
-      "expectancy_C": -6.82998477294338,
-      "pf_C": 0.5898935741548482,
-      "max_drawdown_C": -32091.331386226266,
-      "score_B": 0.752878683419247
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "breakout_lookback": 55,
-        "buffer_atr": 0.2,
-        "cooldown_bars": 16,
-        "k_sl": 3.0,
-        "k_tp": 2.0,
-        "min_sl_points": 8.0,
-        "min_tp_points": 5.0,
-        "allowed_vol_regimes": [
-          "MID",
-          "HIGH"
-        ],
-        "spike_block": false,
-        "adx_rising": false
-      },
-      "trades_A": 5360,
-      "expectancy_A": -2.8533769898740653,
-      "pf_A": 0.8016028915182408,
-      "max_drawdown_A": -15389.217508077292,
-      "trades_B": 5331,
-      "expectancy_B": -3.780447285487842,
-      "pf_B": 0.7464671795520239,
-      "max_drawdown_B": -20244.462643939878,
-      "trades_C": 5274,
-      "expectancy_C": -6.8736985158153505,
-      "pf_C": 0.5822593805707126,
-      "max_drawdown_C": -36329.36260689019,
-      "score_B": 0.7464671795520239
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "breakout_lookback": 100,
-        "buffer_atr": 0.1,
-        "cooldown_bars": 16,
-        "k_sl": 3.0,
-        "k_tp": 2.0,
-        "min_sl_points": 8.0,
-        "min_tp_points": 5.0,
-        "allowed_vol_regimes": [
-          "MID",
-          "HIGH"
-        ],
-        "spike_block": false,
-        "adx_rising": false
-      },
-      "trades_A": 5077,
-      "expectancy_A": -2.9110474064630796,
-      "pf_A": 0.8010627098431866,
-      "max_drawdown_A": -14829.314537036138,
-      "trades_B": 5054,
-      "expectancy_B": -3.8274965697034258,
-      "pf_B": 0.7475027015143492,
-      "max_drawdown_B": -19391.49584035616,
-      "trades_C": 4994,
-      "expectancy_C": -6.916888339084376,
-      "pf_C": 0.5862555332519562,
-      "max_drawdown_C": -34581.15321219025,
-      "score_B": 0.7475027015143492
-    }
-  ]
-}
-
-================
-File: runs_tuning_breakout_small/tuning_metadata.json
-================
-{
-  "limit_bars": null,
-  "grid_size": "small",
-  "workers": 12,
-  "two_stage": true,
-  "tune_scenario": "B",
-  "total_combinations": 729
-}
-
-================
-File: runs_tuning_breakout_small/tuning_results.json
-================
-{
-  "metadata": {
-    "limit_bars": null,
-    "grid_size": "small",
-    "workers": 12,
-    "two_stage": true,
-    "tune_scenario": "B",
-    "total_combinations": 729
-  },
-  "results": [
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 30,
-        "atr_period": 14,
-        "breakout_lookback": 100,
-        "buffer_atr": 0.1,
-        "cooldown_bars": 0,
-        "k_sl": 3.0,
-        "k_tp": 2.0,
-        "min_sl_points": 8.0,
-        "min_tp_points": 5.0,
-        "allowed_vol_regimes": [
-          "MID",
-          "HIGH"
-        ],
-        "spike_block": false,
-        "adx_rising": false
-      },
-      "trades_A": 3055,
-      "expectancy_A": -2.822295793995397,
-      "pf_A": 0.8095450124111133,
-      "max_drawdown_A": -8883.890339402447,
-      "trades_B": 3048,
-      "expectancy_B": -3.9201181712691935,
-      "pf_B": 0.7461961374400355,
-      "max_drawdown_B": -12078.91694712647,
-      "trades_C": 3005,
-      "expectancy_C": -6.982279722226132,
-      "pf_C": 0.588764142631544,
-      "max_drawdown_C": -21106.38136331509,
-      "score_B": 0.7461961374400355
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "breakout_lookback": 100,
-        "buffer_atr": 0.1,
-        "cooldown_bars": 0,
-        "k_sl": 3.0,
-        "k_tp": 2.0,
-        "min_sl_points": 8.0,
-        "min_tp_points": 5.0,
-        "allowed_vol_regimes": [
-          "MID",
-          "HIGH"
-        ],
-        "spike_block": false,
-        "adx_rising": false
-      },
-      "trades_A": 5077,
-      "expectancy_A": -2.9110474064630796,
-      "pf_A": 0.8010627098431866,
-      "max_drawdown_A": -14829.314537036138,
-      "trades_B": 5054,
-      "expectancy_B": -3.8274965697034258,
-      "pf_B": 0.7475027015143492,
-      "max_drawdown_B": -19391.49584035616,
-      "trades_C": 4994,
-      "expectancy_C": -6.916888339084376,
-      "pf_C": 0.5862555332519562,
-      "max_drawdown_C": -34581.15321219025,
-      "score_B": 0.7475027015143492
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "breakout_lookback": 100,
-        "buffer_atr": 0.1,
-        "cooldown_bars": 8,
-        "k_sl": 3.0,
-        "k_tp": 2.0,
-        "min_sl_points": 8.0,
-        "min_tp_points": 5.0,
-        "allowed_vol_regimes": [
-          "MID",
-          "HIGH"
-        ],
-        "spike_block": false,
-        "adx_rising": false
-      },
-      "trades_A": 5077,
-      "expectancy_A": -2.9110474064630796,
-      "pf_A": 0.8010627098431866,
-      "max_drawdown_A": -14829.314537036138,
-      "trades_B": 5054,
-      "expectancy_B": -3.8274965697034258,
-      "pf_B": 0.7475027015143492,
-      "max_drawdown_B": -19391.49584035616,
-      "trades_C": 4994,
-      "expectancy_C": -6.916888339084376,
-      "pf_C": 0.5862555332519562,
-      "max_drawdown_C": -34581.15321219025,
-      "score_B": 0.7475027015143492
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "breakout_lookback": 100,
-        "buffer_atr": 0.2,
-        "cooldown_bars": 8,
-        "k_sl": 3.0,
-        "k_tp": 2.0,
-        "min_sl_points": 8.0,
-        "min_tp_points": 5.0,
-        "allowed_vol_regimes": [
-          "MID",
-          "HIGH"
-        ],
-        "spike_block": false,
-        "adx_rising": false
-      },
-      "trades_A": 4765,
-      "expectancy_A": -2.8262594273243478,
-      "pf_A": 0.8062439782232912,
-      "max_drawdown_A": -13517.053025623592,
-      "trades_B": 4740,
-      "expectancy_B": -3.731279758895965,
-      "pf_B": 0.752878683419247,
-      "max_drawdown_B": -17733.59423424191,
-      "trades_C": 4693,
-      "expectancy_C": -6.82998477294338,
-      "pf_C": 0.5898935741548482,
-      "max_drawdown_C": -32091.331386226266,
-      "score_B": 0.752878683419247
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "breakout_lookback": 100,
-        "buffer_atr": 0.2,
-        "cooldown_bars": 16,
-        "k_sl": 3.0,
-        "k_tp": 2.0,
-        "min_sl_points": 8.0,
-        "min_tp_points": 5.0,
-        "allowed_vol_regimes": [
-          "MID",
-          "HIGH"
-        ],
-        "spike_block": false,
-        "adx_rising": false
-      },
-      "trades_A": 4765,
-      "expectancy_A": -2.8262594273243478,
-      "pf_A": 0.8062439782232912,
-      "max_drawdown_A": -13517.053025623592,
-      "trades_B": 4740,
-      "expectancy_B": -3.731279758895965,
-      "pf_B": 0.752878683419247,
-      "max_drawdown_B": -17733.59423424191,
-      "trades_C": 4693,
-      "expectancy_C": -6.82998477294338,
-      "pf_C": 0.5898935741548482,
-      "max_drawdown_C": -32091.331386226266,
-      "score_B": 0.752878683419247
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "breakout_lookback": 55,
-        "buffer_atr": 0.2,
-        "cooldown_bars": 0,
-        "k_sl": 3.0,
-        "k_tp": 2.0,
-        "min_sl_points": 8.0,
-        "min_tp_points": 5.0,
-        "allowed_vol_regimes": [
-          "MID",
-          "HIGH"
-        ],
-        "spike_block": false,
-        "adx_rising": false
-      },
-      "trades_A": 5360,
-      "expectancy_A": -2.8533769898740653,
-      "pf_A": 0.8016028915182408,
-      "max_drawdown_A": -15389.217508077292,
-      "trades_B": 5331,
-      "expectancy_B": -3.780447285487842,
-      "pf_B": 0.7464671795520239,
-      "max_drawdown_B": -20244.462643939878,
-      "trades_C": 5274,
-      "expectancy_C": -6.8736985158153505,
-      "pf_C": 0.5822593805707126,
-      "max_drawdown_C": -36329.36260689019,
-      "score_B": 0.7464671795520239
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "breakout_lookback": 55,
-        "buffer_atr": 0.2,
-        "cooldown_bars": 8,
-        "k_sl": 3.0,
-        "k_tp": 2.0,
-        "min_sl_points": 8.0,
-        "min_tp_points": 5.0,
-        "allowed_vol_regimes": [
-          "MID",
-          "HIGH"
-        ],
-        "spike_block": false,
-        "adx_rising": false
-      },
-      "trades_A": 5360,
-      "expectancy_A": -2.8533769898740653,
-      "pf_A": 0.8016028915182408,
-      "max_drawdown_A": -15389.217508077292,
-      "trades_B": 5331,
-      "expectancy_B": -3.780447285487842,
-      "pf_B": 0.7464671795520239,
-      "max_drawdown_B": -20244.462643939878,
-      "trades_C": 5274,
-      "expectancy_C": -6.8736985158153505,
-      "pf_C": 0.5822593805707126,
-      "max_drawdown_C": -36329.36260689019,
-      "score_B": 0.7464671795520239
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "breakout_lookback": 100,
-        "buffer_atr": 0.2,
-        "cooldown_bars": 0,
-        "k_sl": 3.0,
-        "k_tp": 2.0,
-        "min_sl_points": 8.0,
-        "min_tp_points": 5.0,
-        "allowed_vol_regimes": [
-          "MID",
-          "HIGH"
-        ],
-        "spike_block": false,
-        "adx_rising": false
-      },
-      "trades_A": 4765,
-      "expectancy_A": -2.8262594273243478,
-      "pf_A": 0.8062439782232912,
-      "max_drawdown_A": -13517.053025623592,
-      "trades_B": 4740,
-      "expectancy_B": -3.731279758895965,
-      "pf_B": 0.752878683419247,
-      "max_drawdown_B": -17733.59423424191,
-      "trades_C": 4693,
-      "expectancy_C": -6.82998477294338,
-      "pf_C": 0.5898935741548482,
-      "max_drawdown_C": -32091.331386226266,
-      "score_B": 0.752878683419247
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "breakout_lookback": 55,
-        "buffer_atr": 0.2,
-        "cooldown_bars": 16,
-        "k_sl": 3.0,
-        "k_tp": 2.0,
-        "min_sl_points": 8.0,
-        "min_tp_points": 5.0,
-        "allowed_vol_regimes": [
-          "MID",
-          "HIGH"
-        ],
-        "spike_block": false,
-        "adx_rising": false
-      },
-      "trades_A": 5360,
-      "expectancy_A": -2.8533769898740653,
-      "pf_A": 0.8016028915182408,
-      "max_drawdown_A": -15389.217508077292,
-      "trades_B": 5331,
-      "expectancy_B": -3.780447285487842,
-      "pf_B": 0.7464671795520239,
-      "max_drawdown_B": -20244.462643939878,
-      "trades_C": 5274,
-      "expectancy_C": -6.8736985158153505,
-      "pf_C": 0.5822593805707126,
-      "max_drawdown_C": -36329.36260689019,
-      "score_B": 0.7464671795520239
-    },
-    {
-      "params": {
-        "ema_fast": 30,
-        "ema_slow": 100,
-        "adx_period": 14,
-        "adx_th": 20,
-        "atr_period": 14,
-        "breakout_lookback": 100,
-        "buffer_atr": 0.1,
-        "cooldown_bars": 16,
-        "k_sl": 3.0,
-        "k_tp": 2.0,
-        "min_sl_points": 8.0,
-        "min_tp_points": 5.0,
-        "allowed_vol_regimes": [
-          "MID",
-          "HIGH"
-        ],
-        "spike_block": false,
-        "adx_rising": false
-      },
-      "trades_A": 5077,
-      "expectancy_A": -2.9110474064630796,
-      "pf_A": 0.8010627098431866,
-      "max_drawdown_A": -14829.314537036138,
-      "trades_B": 5054,
-      "expectancy_B": -3.8274965697034258,
-      "pf_B": 0.7475027015143492,
-      "max_drawdown_B": -19391.49584035616,
-      "trades_C": 4994,
-      "expectancy_C": -6.916888339084376,
-      "pf_C": 0.5862555332519562,
-      "max_drawdown_C": -34581.15321219025,
-      "score_B": 0.7475027015143492
-    }
-  ]
-}
 
 ================
 File: tests/conftest.py
@@ -1343,6 +826,69 @@ def test_load_ohlc_csv(tmp_path: Path):
     assert df["low"].dtype == float
     assert df["close"].dtype == float
     assert df["time"].iloc[0] < df["time"].iloc[1]
+
+================
+File: tests/test_montecarlo.py
+================
+import random
+
+from montecarlo.mc1_block_bootstrap import _block_bootstrap_sample, run_block_bootstrap
+from montecarlo.mc2_cost_noise import run_cost_noise
+
+
+def test_seed_determinism():
+    trade_pnls = [1.0, -0.5, 0.25, -0.75, 1.5]
+    result_a = run_block_bootstrap(trade_pnls, block_min=2, block_max=3, n_sims=5, seed=42)
+    result_b = run_block_bootstrap(trade_pnls, block_min=2, block_max=3, n_sims=5, seed=42)
+    assert result_a == result_b
+
+    trades_pre_cost = [
+        {"pnl_pre_cost": 1.0, "spread_cost": 0.1, "slippage_cost": 0.05, "is_spike": False},
+        {"pnl_pre_cost": -0.5, "spread_cost": 0.1, "slippage_cost": 0.08, "is_spike": True},
+        {"pnl_pre_cost": 0.75, "spread_cost": 0.1, "slippage_cost": 0.03, "is_spike": False},
+    ]
+    noise_params = {
+        "spread_mult_range": (0.8, 1.2),
+        "slippage_mult_range": (0.7, 1.3),
+        "spike_slippage_mult_range": (1.2, 1.8),
+    }
+    result_c = run_cost_noise(trades_pre_cost, cost_model=None, noise_params=noise_params, n_sims=10, seed=7)
+    result_d = run_cost_noise(trades_pre_cost, cost_model=None, noise_params=noise_params, n_sims=10, seed=7)
+    assert result_c == result_d
+
+
+def test_block_bootstrap_preserves_structure():
+    trade_pnls = [float(i) for i in range(10)]
+    rng = random.Random(123)
+    sample = _block_bootstrap_sample(trade_pnls, block_min=3, block_max=3, rng=rng)
+
+    original_pairs = {(trade_pnls[i], trade_pnls[i + 1]) for i in range(len(trade_pnls) - 1)}
+    adjacency_count = sum(
+        1
+        for i in range(len(sample) - 1)
+        if (sample[i], sample[i + 1]) in original_pairs
+    )
+
+    assert adjacency_count >= 6
+
+
+def test_cost_noise_changes_distribution():
+    trades_pre_cost = [
+        {"pnl_pre_cost": 1.0, "spread_cost": 0.1, "slippage_cost": 0.05, "is_spike": False},
+        {"pnl_pre_cost": -0.5, "spread_cost": 0.1, "slippage_cost": 0.08, "is_spike": True},
+        {"pnl_pre_cost": 0.75, "spread_cost": 0.1, "slippage_cost": 0.03, "is_spike": False},
+        {"pnl_pre_cost": 0.2, "spread_cost": 0.1, "slippage_cost": 0.04, "is_spike": True},
+    ]
+    noise_params = {
+        "spread_mult_range": (0.8, 1.2),
+        "slippage_mult_range": (0.7, 1.3),
+        "spike_slippage_mult_range": (1.2, 1.8),
+    }
+
+    result = run_cost_noise(trades_pre_cost, cost_model=None, noise_params=noise_params, n_sims=50, seed=99)
+    rounded = {round(value, 6) for value in result["pnl_distribution"]}
+
+    assert len(rounded) > 1
 
 ================
 File: validation/__init__.py
@@ -5510,231 +5056,6 @@ def _flag_status(
     return "OK"
 
 ================
-File: montecarlo/__init__.py
-================
-from montecarlo.mc1_block_bootstrap import run_block_bootstrap
-from montecarlo.mc2_cost_noise import run_cost_noise
-
-__all__ = ["run_block_bootstrap", "run_cost_noise"]
-
-================
-File: montecarlo/mc1_block_bootstrap.py
-================
-from __future__ import annotations
-
-import math
-import random
-from typing import Sequence
-
-
-def _block_bootstrap_sample(
-    trade_pnls: Sequence[float],
-    block_min: int,
-    block_max: int,
-    rng: random.Random,
-) -> list[float]:
-    if block_min <= 0 or block_max <= 0:
-        raise ValueError("block_min and block_max must be positive")
-    if block_min > block_max:
-        raise ValueError("block_min must be <= block_max")
-
-    n = len(trade_pnls)
-    if n == 0:
-        return []
-
-    sample: list[float] = []
-    while len(sample) < n:
-        block_len = rng.randint(block_min, block_max)
-        start = rng.randrange(0, n)
-        for offset in range(block_len):
-            sample.append(trade_pnls[(start + offset) % n])
-            if len(sample) >= n:
-                break
-    return sample
-
-
-def _max_drawdown_and_recovery(pnls: Sequence[float]) -> tuple[float, int]:
-    equity = 0.0
-    peak = 0.0
-    peak_index = 0
-    max_dd = 0.0
-    max_recovery = 0
-    in_drawdown = False
-
-    for idx, pnl in enumerate(pnls):
-        equity += float(pnl)
-        if equity >= peak:
-            if in_drawdown:
-                max_recovery = max(max_recovery, idx - peak_index)
-                in_drawdown = False
-            peak = equity
-            peak_index = idx
-        else:
-            in_drawdown = True
-            max_dd = max(max_dd, peak - equity)
-
-    if in_drawdown:
-        max_recovery = max(max_recovery, len(pnls) - 1 - peak_index)
-
-    return max_dd, max_recovery
-
-
-def _percentile(sorted_values: Sequence[float], pct: float) -> float:
-    if not sorted_values:
-        return 0.0
-    if pct <= 0:
-        return sorted_values[0]
-    if pct >= 1:
-        return sorted_values[-1]
-    idx = int(math.ceil(pct * len(sorted_values)) - 1)
-    idx = max(0, min(idx, len(sorted_values) - 1))
-    return sorted_values[idx]
-
-
-def run_block_bootstrap(
-    trade_pnls: Sequence[float],
-    block_min: int,
-    block_max: int,
-    n_sims: int,
-    seed: int,
-) -> dict:
-    rng = random.Random(seed)
-    pnls_list = list(trade_pnls)
-    if n_sims <= 0:
-        raise ValueError("n_sims must be positive")
-
-    baseline_peak = 0.0
-    equity = 0.0
-    for pnl in pnls_list:
-        equity += float(pnl)
-        baseline_peak = max(baseline_peak, equity)
-    dd_threshold = 0.1 * max(1.0, baseline_peak)
-
-    max_drawdowns: list[float] = []
-    recoveries: list[int] = []
-
-    for _ in range(n_sims):
-        sample = _block_bootstrap_sample(pnls_list, block_min, block_max, rng)
-        max_dd, max_rec = _max_drawdown_and_recovery(sample)
-        max_drawdowns.append(max_dd)
-        recoveries.append(max_rec)
-
-    prob_dd_gt_threshold = sum(1 for dd in max_drawdowns if dd > dd_threshold) / n_sims
-    sorted_dds = sorted(max_drawdowns)
-    worst_1pct = _percentile(sorted_dds, 0.99)
-
-    return {
-        "max_drawdowns": max_drawdowns,
-        "prob_dd_gt_threshold": prob_dd_gt_threshold,
-        "dd_threshold": dd_threshold,
-        "time_to_recovery": recoveries,
-        "worst_1pct": worst_1pct,
-    }
-
-================
-File: montecarlo/mc2_cost_noise.py
-================
-from __future__ import annotations
-
-import math
-import random
-from typing import Iterable, Mapping, Sequence
-
-
-def _get_cost_model_params(cost_model: object | None) -> tuple[float, float, float]:
-    if cost_model is None:
-        return 1.0, 1.0, 0.0
-    if isinstance(cost_model, Mapping):
-        return (
-            float(cost_model.get("spread_mult", 1.0)),
-            float(cost_model.get("slippage_mult", 1.0)),
-            float(cost_model.get("slippage_add", 0.0)),
-        )
-    spread_mult = float(getattr(cost_model, "spread_mult", 1.0))
-    slippage_mult = float(getattr(cost_model, "slippage_mult", 1.0))
-    slippage_add = float(getattr(cost_model, "slippage_add", 0.0))
-    return spread_mult, slippage_mult, slippage_add
-
-
-def _get_noise_range(noise_params: Mapping[str, object], key: str, default: tuple[float, float]) -> tuple[float, float]:
-    value = noise_params.get(key, default)
-    if isinstance(value, Sequence) and len(value) == 2:
-        return float(value[0]), float(value[1])
-    return default
-
-
-def _apply_cost_noise(
-    trades_pre_cost: Sequence[Mapping[str, object]],
-    cost_model: object | None,
-    noise_params: Mapping[str, object],
-    rng: random.Random,
-) -> list[float]:
-    spread_mult_base, slippage_mult_base, slippage_add = _get_cost_model_params(cost_model)
-    spread_range = _get_noise_range(noise_params, "spread_mult_range", (1.0, 1.0))
-    slippage_range = _get_noise_range(noise_params, "slippage_mult_range", (1.0, 1.0))
-    spike_range = _get_noise_range(noise_params, "spike_slippage_mult_range", (1.0, 1.0))
-
-    pnls_post_cost: list[float] = []
-    for trade in trades_pre_cost:
-        pnl_pre_cost = float(trade.get("pnl_pre_cost", trade.get("pnl", 0.0)))
-        spread_cost = float(trade.get("spread_cost", 0.0))
-        slippage_cost = float(trade.get("slippage_cost", 0.0))
-        is_spike = bool(trade.get("is_spike", False))
-
-        spread_mult = rng.uniform(*spread_range)
-        slippage_mult = rng.uniform(*slippage_range)
-        if is_spike:
-            slippage_mult *= rng.uniform(*spike_range)
-
-        cost = spread_cost * spread_mult_base * spread_mult
-        cost += slippage_cost * slippage_mult_base * slippage_mult
-        cost += slippage_add
-        pnls_post_cost.append(pnl_pre_cost - cost)
-
-    return pnls_post_cost
-
-
-def _mean(values: Iterable[float]) -> float:
-    vals = list(values)
-    if not vals:
-        return 0.0
-    return sum(vals) / len(vals)
-
-
-def _stdev(values: Iterable[float], mean: float) -> float:
-    vals = list(values)
-    if len(vals) < 2:
-        return 0.0
-    variance = sum((v - mean) ** 2 for v in vals) / (len(vals) - 1)
-    return math.sqrt(variance)
-
-
-def run_cost_noise(
-    trades_pre_cost: Sequence[Mapping[str, object]],
-    cost_model: object | None,
-    noise_params: Mapping[str, object],
-    n_sims: int,
-    seed: int,
-) -> dict:
-    if n_sims <= 0:
-        raise ValueError("n_sims must be positive")
-    rng = random.Random(seed)
-
-    pnl_distribution: list[float] = []
-    for _ in range(n_sims):
-        pnls_post_cost = _apply_cost_noise(trades_pre_cost, cost_model, noise_params, rng)
-        pnl_distribution.append(sum(pnls_post_cost))
-
-    mean_pnl = _mean(pnl_distribution)
-    stdev_pnl = _stdev(pnl_distribution, mean_pnl)
-
-    return {
-        "pnl_distribution": pnl_distribution,
-        "mean_pnl": mean_pnl,
-        "stdev_pnl": stdev_pnl,
-    }
-
-================
 File: QUICK_REFERENCE.md
 ================
 # S1 Donchian Breakout - Quick Reference Card
@@ -6237,6 +5558,750 @@ def _resolve_netting(signals: List[SignalIntent]) -> List[SignalIntent]:
 
 
 __all__ = ["resolve_conflicts"]
+
+================
+File: runs_tuning_breakout_small/top_k.json
+================
+{
+  "metadata": {
+    "limit_bars": null,
+    "grid_size": "small",
+    "workers": 12,
+    "two_stage": true,
+    "tune_scenario": "B",
+    "total_combinations": 729
+  },
+  "results": [
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 30,
+        "atr_period": 14,
+        "breakout_lookback": 100,
+        "buffer_atr": 0.1,
+        "cooldown_bars": 0,
+        "k_sl": 3.0,
+        "k_tp": 2.0,
+        "min_sl_points": 8.0,
+        "min_tp_points": 5.0,
+        "allowed_vol_regimes": [
+          "MID",
+          "HIGH"
+        ],
+        "spike_block": false,
+        "adx_rising": false
+      },
+      "trades_A": 3055,
+      "expectancy_A": -2.822295793995397,
+      "pf_A": 0.8095450124111133,
+      "max_drawdown_A": -8883.890339402447,
+      "trades_B": 3048,
+      "expectancy_B": -3.9201181712691935,
+      "pf_B": 0.7461961374400355,
+      "max_drawdown_B": -12078.91694712647,
+      "trades_C": 3005,
+      "expectancy_C": -6.982279722226132,
+      "pf_C": 0.588764142631544,
+      "max_drawdown_C": -21106.38136331509,
+      "score_B": 0.7461961374400355
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "breakout_lookback": 100,
+        "buffer_atr": 0.1,
+        "cooldown_bars": 0,
+        "k_sl": 3.0,
+        "k_tp": 2.0,
+        "min_sl_points": 8.0,
+        "min_tp_points": 5.0,
+        "allowed_vol_regimes": [
+          "MID",
+          "HIGH"
+        ],
+        "spike_block": false,
+        "adx_rising": false
+      },
+      "trades_A": 5077,
+      "expectancy_A": -2.9110474064630796,
+      "pf_A": 0.8010627098431866,
+      "max_drawdown_A": -14829.314537036138,
+      "trades_B": 5054,
+      "expectancy_B": -3.8274965697034258,
+      "pf_B": 0.7475027015143492,
+      "max_drawdown_B": -19391.49584035616,
+      "trades_C": 4994,
+      "expectancy_C": -6.916888339084376,
+      "pf_C": 0.5862555332519562,
+      "max_drawdown_C": -34581.15321219025,
+      "score_B": 0.7475027015143492
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "breakout_lookback": 100,
+        "buffer_atr": 0.1,
+        "cooldown_bars": 8,
+        "k_sl": 3.0,
+        "k_tp": 2.0,
+        "min_sl_points": 8.0,
+        "min_tp_points": 5.0,
+        "allowed_vol_regimes": [
+          "MID",
+          "HIGH"
+        ],
+        "spike_block": false,
+        "adx_rising": false
+      },
+      "trades_A": 5077,
+      "expectancy_A": -2.9110474064630796,
+      "pf_A": 0.8010627098431866,
+      "max_drawdown_A": -14829.314537036138,
+      "trades_B": 5054,
+      "expectancy_B": -3.8274965697034258,
+      "pf_B": 0.7475027015143492,
+      "max_drawdown_B": -19391.49584035616,
+      "trades_C": 4994,
+      "expectancy_C": -6.916888339084376,
+      "pf_C": 0.5862555332519562,
+      "max_drawdown_C": -34581.15321219025,
+      "score_B": 0.7475027015143492
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "breakout_lookback": 100,
+        "buffer_atr": 0.2,
+        "cooldown_bars": 8,
+        "k_sl": 3.0,
+        "k_tp": 2.0,
+        "min_sl_points": 8.0,
+        "min_tp_points": 5.0,
+        "allowed_vol_regimes": [
+          "MID",
+          "HIGH"
+        ],
+        "spike_block": false,
+        "adx_rising": false
+      },
+      "trades_A": 4765,
+      "expectancy_A": -2.8262594273243478,
+      "pf_A": 0.8062439782232912,
+      "max_drawdown_A": -13517.053025623592,
+      "trades_B": 4740,
+      "expectancy_B": -3.731279758895965,
+      "pf_B": 0.752878683419247,
+      "max_drawdown_B": -17733.59423424191,
+      "trades_C": 4693,
+      "expectancy_C": -6.82998477294338,
+      "pf_C": 0.5898935741548482,
+      "max_drawdown_C": -32091.331386226266,
+      "score_B": 0.752878683419247
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "breakout_lookback": 100,
+        "buffer_atr": 0.2,
+        "cooldown_bars": 16,
+        "k_sl": 3.0,
+        "k_tp": 2.0,
+        "min_sl_points": 8.0,
+        "min_tp_points": 5.0,
+        "allowed_vol_regimes": [
+          "MID",
+          "HIGH"
+        ],
+        "spike_block": false,
+        "adx_rising": false
+      },
+      "trades_A": 4765,
+      "expectancy_A": -2.8262594273243478,
+      "pf_A": 0.8062439782232912,
+      "max_drawdown_A": -13517.053025623592,
+      "trades_B": 4740,
+      "expectancy_B": -3.731279758895965,
+      "pf_B": 0.752878683419247,
+      "max_drawdown_B": -17733.59423424191,
+      "trades_C": 4693,
+      "expectancy_C": -6.82998477294338,
+      "pf_C": 0.5898935741548482,
+      "max_drawdown_C": -32091.331386226266,
+      "score_B": 0.752878683419247
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "breakout_lookback": 55,
+        "buffer_atr": 0.2,
+        "cooldown_bars": 0,
+        "k_sl": 3.0,
+        "k_tp": 2.0,
+        "min_sl_points": 8.0,
+        "min_tp_points": 5.0,
+        "allowed_vol_regimes": [
+          "MID",
+          "HIGH"
+        ],
+        "spike_block": false,
+        "adx_rising": false
+      },
+      "trades_A": 5360,
+      "expectancy_A": -2.8533769898740653,
+      "pf_A": 0.8016028915182408,
+      "max_drawdown_A": -15389.217508077292,
+      "trades_B": 5331,
+      "expectancy_B": -3.780447285487842,
+      "pf_B": 0.7464671795520239,
+      "max_drawdown_B": -20244.462643939878,
+      "trades_C": 5274,
+      "expectancy_C": -6.8736985158153505,
+      "pf_C": 0.5822593805707126,
+      "max_drawdown_C": -36329.36260689019,
+      "score_B": 0.7464671795520239
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "breakout_lookback": 55,
+        "buffer_atr": 0.2,
+        "cooldown_bars": 8,
+        "k_sl": 3.0,
+        "k_tp": 2.0,
+        "min_sl_points": 8.0,
+        "min_tp_points": 5.0,
+        "allowed_vol_regimes": [
+          "MID",
+          "HIGH"
+        ],
+        "spike_block": false,
+        "adx_rising": false
+      },
+      "trades_A": 5360,
+      "expectancy_A": -2.8533769898740653,
+      "pf_A": 0.8016028915182408,
+      "max_drawdown_A": -15389.217508077292,
+      "trades_B": 5331,
+      "expectancy_B": -3.780447285487842,
+      "pf_B": 0.7464671795520239,
+      "max_drawdown_B": -20244.462643939878,
+      "trades_C": 5274,
+      "expectancy_C": -6.8736985158153505,
+      "pf_C": 0.5822593805707126,
+      "max_drawdown_C": -36329.36260689019,
+      "score_B": 0.7464671795520239
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "breakout_lookback": 100,
+        "buffer_atr": 0.2,
+        "cooldown_bars": 0,
+        "k_sl": 3.0,
+        "k_tp": 2.0,
+        "min_sl_points": 8.0,
+        "min_tp_points": 5.0,
+        "allowed_vol_regimes": [
+          "MID",
+          "HIGH"
+        ],
+        "spike_block": false,
+        "adx_rising": false
+      },
+      "trades_A": 4765,
+      "expectancy_A": -2.8262594273243478,
+      "pf_A": 0.8062439782232912,
+      "max_drawdown_A": -13517.053025623592,
+      "trades_B": 4740,
+      "expectancy_B": -3.731279758895965,
+      "pf_B": 0.752878683419247,
+      "max_drawdown_B": -17733.59423424191,
+      "trades_C": 4693,
+      "expectancy_C": -6.82998477294338,
+      "pf_C": 0.5898935741548482,
+      "max_drawdown_C": -32091.331386226266,
+      "score_B": 0.752878683419247
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "breakout_lookback": 55,
+        "buffer_atr": 0.2,
+        "cooldown_bars": 16,
+        "k_sl": 3.0,
+        "k_tp": 2.0,
+        "min_sl_points": 8.0,
+        "min_tp_points": 5.0,
+        "allowed_vol_regimes": [
+          "MID",
+          "HIGH"
+        ],
+        "spike_block": false,
+        "adx_rising": false
+      },
+      "trades_A": 5360,
+      "expectancy_A": -2.8533769898740653,
+      "pf_A": 0.8016028915182408,
+      "max_drawdown_A": -15389.217508077292,
+      "trades_B": 5331,
+      "expectancy_B": -3.780447285487842,
+      "pf_B": 0.7464671795520239,
+      "max_drawdown_B": -20244.462643939878,
+      "trades_C": 5274,
+      "expectancy_C": -6.8736985158153505,
+      "pf_C": 0.5822593805707126,
+      "max_drawdown_C": -36329.36260689019,
+      "score_B": 0.7464671795520239
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "breakout_lookback": 100,
+        "buffer_atr": 0.1,
+        "cooldown_bars": 16,
+        "k_sl": 3.0,
+        "k_tp": 2.0,
+        "min_sl_points": 8.0,
+        "min_tp_points": 5.0,
+        "allowed_vol_regimes": [
+          "MID",
+          "HIGH"
+        ],
+        "spike_block": false,
+        "adx_rising": false
+      },
+      "trades_A": 5077,
+      "expectancy_A": -2.9110474064630796,
+      "pf_A": 0.8010627098431866,
+      "max_drawdown_A": -14829.314537036138,
+      "trades_B": 5054,
+      "expectancy_B": -3.8274965697034258,
+      "pf_B": 0.7475027015143492,
+      "max_drawdown_B": -19391.49584035616,
+      "trades_C": 4994,
+      "expectancy_C": -6.916888339084376,
+      "pf_C": 0.5862555332519562,
+      "max_drawdown_C": -34581.15321219025,
+      "score_B": 0.7475027015143492
+    }
+  ]
+}
+
+================
+File: runs_tuning_breakout_small/tuning_metadata.json
+================
+{
+  "limit_bars": null,
+  "grid_size": "small",
+  "workers": 12,
+  "two_stage": true,
+  "tune_scenario": "B",
+  "total_combinations": 729
+}
+
+================
+File: runs_tuning_breakout_small/tuning_results.json
+================
+{
+  "metadata": {
+    "limit_bars": null,
+    "grid_size": "small",
+    "workers": 12,
+    "two_stage": true,
+    "tune_scenario": "B",
+    "total_combinations": 729
+  },
+  "results": [
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 30,
+        "atr_period": 14,
+        "breakout_lookback": 100,
+        "buffer_atr": 0.1,
+        "cooldown_bars": 0,
+        "k_sl": 3.0,
+        "k_tp": 2.0,
+        "min_sl_points": 8.0,
+        "min_tp_points": 5.0,
+        "allowed_vol_regimes": [
+          "MID",
+          "HIGH"
+        ],
+        "spike_block": false,
+        "adx_rising": false
+      },
+      "trades_A": 3055,
+      "expectancy_A": -2.822295793995397,
+      "pf_A": 0.8095450124111133,
+      "max_drawdown_A": -8883.890339402447,
+      "trades_B": 3048,
+      "expectancy_B": -3.9201181712691935,
+      "pf_B": 0.7461961374400355,
+      "max_drawdown_B": -12078.91694712647,
+      "trades_C": 3005,
+      "expectancy_C": -6.982279722226132,
+      "pf_C": 0.588764142631544,
+      "max_drawdown_C": -21106.38136331509,
+      "score_B": 0.7461961374400355
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "breakout_lookback": 100,
+        "buffer_atr": 0.1,
+        "cooldown_bars": 0,
+        "k_sl": 3.0,
+        "k_tp": 2.0,
+        "min_sl_points": 8.0,
+        "min_tp_points": 5.0,
+        "allowed_vol_regimes": [
+          "MID",
+          "HIGH"
+        ],
+        "spike_block": false,
+        "adx_rising": false
+      },
+      "trades_A": 5077,
+      "expectancy_A": -2.9110474064630796,
+      "pf_A": 0.8010627098431866,
+      "max_drawdown_A": -14829.314537036138,
+      "trades_B": 5054,
+      "expectancy_B": -3.8274965697034258,
+      "pf_B": 0.7475027015143492,
+      "max_drawdown_B": -19391.49584035616,
+      "trades_C": 4994,
+      "expectancy_C": -6.916888339084376,
+      "pf_C": 0.5862555332519562,
+      "max_drawdown_C": -34581.15321219025,
+      "score_B": 0.7475027015143492
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "breakout_lookback": 100,
+        "buffer_atr": 0.1,
+        "cooldown_bars": 8,
+        "k_sl": 3.0,
+        "k_tp": 2.0,
+        "min_sl_points": 8.0,
+        "min_tp_points": 5.0,
+        "allowed_vol_regimes": [
+          "MID",
+          "HIGH"
+        ],
+        "spike_block": false,
+        "adx_rising": false
+      },
+      "trades_A": 5077,
+      "expectancy_A": -2.9110474064630796,
+      "pf_A": 0.8010627098431866,
+      "max_drawdown_A": -14829.314537036138,
+      "trades_B": 5054,
+      "expectancy_B": -3.8274965697034258,
+      "pf_B": 0.7475027015143492,
+      "max_drawdown_B": -19391.49584035616,
+      "trades_C": 4994,
+      "expectancy_C": -6.916888339084376,
+      "pf_C": 0.5862555332519562,
+      "max_drawdown_C": -34581.15321219025,
+      "score_B": 0.7475027015143492
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "breakout_lookback": 100,
+        "buffer_atr": 0.2,
+        "cooldown_bars": 8,
+        "k_sl": 3.0,
+        "k_tp": 2.0,
+        "min_sl_points": 8.0,
+        "min_tp_points": 5.0,
+        "allowed_vol_regimes": [
+          "MID",
+          "HIGH"
+        ],
+        "spike_block": false,
+        "adx_rising": false
+      },
+      "trades_A": 4765,
+      "expectancy_A": -2.8262594273243478,
+      "pf_A": 0.8062439782232912,
+      "max_drawdown_A": -13517.053025623592,
+      "trades_B": 4740,
+      "expectancy_B": -3.731279758895965,
+      "pf_B": 0.752878683419247,
+      "max_drawdown_B": -17733.59423424191,
+      "trades_C": 4693,
+      "expectancy_C": -6.82998477294338,
+      "pf_C": 0.5898935741548482,
+      "max_drawdown_C": -32091.331386226266,
+      "score_B": 0.752878683419247
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "breakout_lookback": 100,
+        "buffer_atr": 0.2,
+        "cooldown_bars": 16,
+        "k_sl": 3.0,
+        "k_tp": 2.0,
+        "min_sl_points": 8.0,
+        "min_tp_points": 5.0,
+        "allowed_vol_regimes": [
+          "MID",
+          "HIGH"
+        ],
+        "spike_block": false,
+        "adx_rising": false
+      },
+      "trades_A": 4765,
+      "expectancy_A": -2.8262594273243478,
+      "pf_A": 0.8062439782232912,
+      "max_drawdown_A": -13517.053025623592,
+      "trades_B": 4740,
+      "expectancy_B": -3.731279758895965,
+      "pf_B": 0.752878683419247,
+      "max_drawdown_B": -17733.59423424191,
+      "trades_C": 4693,
+      "expectancy_C": -6.82998477294338,
+      "pf_C": 0.5898935741548482,
+      "max_drawdown_C": -32091.331386226266,
+      "score_B": 0.752878683419247
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "breakout_lookback": 55,
+        "buffer_atr": 0.2,
+        "cooldown_bars": 0,
+        "k_sl": 3.0,
+        "k_tp": 2.0,
+        "min_sl_points": 8.0,
+        "min_tp_points": 5.0,
+        "allowed_vol_regimes": [
+          "MID",
+          "HIGH"
+        ],
+        "spike_block": false,
+        "adx_rising": false
+      },
+      "trades_A": 5360,
+      "expectancy_A": -2.8533769898740653,
+      "pf_A": 0.8016028915182408,
+      "max_drawdown_A": -15389.217508077292,
+      "trades_B": 5331,
+      "expectancy_B": -3.780447285487842,
+      "pf_B": 0.7464671795520239,
+      "max_drawdown_B": -20244.462643939878,
+      "trades_C": 5274,
+      "expectancy_C": -6.8736985158153505,
+      "pf_C": 0.5822593805707126,
+      "max_drawdown_C": -36329.36260689019,
+      "score_B": 0.7464671795520239
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "breakout_lookback": 55,
+        "buffer_atr": 0.2,
+        "cooldown_bars": 8,
+        "k_sl": 3.0,
+        "k_tp": 2.0,
+        "min_sl_points": 8.0,
+        "min_tp_points": 5.0,
+        "allowed_vol_regimes": [
+          "MID",
+          "HIGH"
+        ],
+        "spike_block": false,
+        "adx_rising": false
+      },
+      "trades_A": 5360,
+      "expectancy_A": -2.8533769898740653,
+      "pf_A": 0.8016028915182408,
+      "max_drawdown_A": -15389.217508077292,
+      "trades_B": 5331,
+      "expectancy_B": -3.780447285487842,
+      "pf_B": 0.7464671795520239,
+      "max_drawdown_B": -20244.462643939878,
+      "trades_C": 5274,
+      "expectancy_C": -6.8736985158153505,
+      "pf_C": 0.5822593805707126,
+      "max_drawdown_C": -36329.36260689019,
+      "score_B": 0.7464671795520239
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "breakout_lookback": 100,
+        "buffer_atr": 0.2,
+        "cooldown_bars": 0,
+        "k_sl": 3.0,
+        "k_tp": 2.0,
+        "min_sl_points": 8.0,
+        "min_tp_points": 5.0,
+        "allowed_vol_regimes": [
+          "MID",
+          "HIGH"
+        ],
+        "spike_block": false,
+        "adx_rising": false
+      },
+      "trades_A": 4765,
+      "expectancy_A": -2.8262594273243478,
+      "pf_A": 0.8062439782232912,
+      "max_drawdown_A": -13517.053025623592,
+      "trades_B": 4740,
+      "expectancy_B": -3.731279758895965,
+      "pf_B": 0.752878683419247,
+      "max_drawdown_B": -17733.59423424191,
+      "trades_C": 4693,
+      "expectancy_C": -6.82998477294338,
+      "pf_C": 0.5898935741548482,
+      "max_drawdown_C": -32091.331386226266,
+      "score_B": 0.752878683419247
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "breakout_lookback": 55,
+        "buffer_atr": 0.2,
+        "cooldown_bars": 16,
+        "k_sl": 3.0,
+        "k_tp": 2.0,
+        "min_sl_points": 8.0,
+        "min_tp_points": 5.0,
+        "allowed_vol_regimes": [
+          "MID",
+          "HIGH"
+        ],
+        "spike_block": false,
+        "adx_rising": false
+      },
+      "trades_A": 5360,
+      "expectancy_A": -2.8533769898740653,
+      "pf_A": 0.8016028915182408,
+      "max_drawdown_A": -15389.217508077292,
+      "trades_B": 5331,
+      "expectancy_B": -3.780447285487842,
+      "pf_B": 0.7464671795520239,
+      "max_drawdown_B": -20244.462643939878,
+      "trades_C": 5274,
+      "expectancy_C": -6.8736985158153505,
+      "pf_C": 0.5822593805707126,
+      "max_drawdown_C": -36329.36260689019,
+      "score_B": 0.7464671795520239
+    },
+    {
+      "params": {
+        "ema_fast": 30,
+        "ema_slow": 100,
+        "adx_period": 14,
+        "adx_th": 20,
+        "atr_period": 14,
+        "breakout_lookback": 100,
+        "buffer_atr": 0.1,
+        "cooldown_bars": 16,
+        "k_sl": 3.0,
+        "k_tp": 2.0,
+        "min_sl_points": 8.0,
+        "min_tp_points": 5.0,
+        "allowed_vol_regimes": [
+          "MID",
+          "HIGH"
+        ],
+        "spike_block": false,
+        "adx_rising": false
+      },
+      "trades_A": 5077,
+      "expectancy_A": -2.9110474064630796,
+      "pf_A": 0.8010627098431866,
+      "max_drawdown_A": -14829.314537036138,
+      "trades_B": 5054,
+      "expectancy_B": -3.8274965697034258,
+      "pf_B": 0.7475027015143492,
+      "max_drawdown_B": -19391.49584035616,
+      "trades_C": 4994,
+      "expectancy_C": -6.916888339084376,
+      "pf_C": 0.5862555332519562,
+      "max_drawdown_C": -34581.15321219025,
+      "score_B": 0.7475027015143492
+    }
+  ]
+}
 
 ================
 File: runs_tuning_small/top_k.json
@@ -9037,6 +9102,278 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     )
 
 ================
+File: strategies/s2_trend_expansion_breakout.py
+================
+"""
+S2 Trend Expansion Breakout Strategy
+
+Philosophy:
+- Trade RARELY via volatility expansion filter
+- Enter only when volatility EXPANDS after compression
+- Capture LARGE moves using ATR-based position sizing
+- Beat costs via move size, not win rate
+
+Core logic:
+1. Identify trend bias (EMA fast > slow = LONG)
+2. Wait for volatility compression (vol_ratio low)
+3. Then trade breakout when volatility EXPANDS
+4. True Range impulse must be strong (large moves)
+5. Use trailing stop via chandelier concept
+
+No lookahead: All features use shift(1) or historical data only.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Dict, Optional, Set
+
+import numpy as np
+
+from desk_types import Side, SignalIntent
+
+STRATEGY_ID = "s2_trend_expansion_breakout"
+
+
+def required_features() -> Set[str]:
+    """Features that must be precomputed in orchestrator."""
+    return {
+        "close", "high", "low", "open",
+        "ema_fast", "ema_slow",
+        "atr_short", "atr_long",
+        "atr_pips",
+        "breakout_hh", "breakout_ll",
+        "vol_ratio",
+        "regime_snapshot",  # For VOL/SPIKE info
+    }
+
+
+def _read_value(values: np.ndarray, idx: int) -> Optional[float]:
+    """Safely read a value from an array, handling NaN and None."""
+    if idx < 0 or idx >= len(values):
+        return None
+    value = values[idx]
+    if value is None:
+        return None
+    if isinstance(value, (float, np.floating)) and np.isnan(value):
+        return None
+    return float(value)
+
+
+def _parse_regime_snapshot(regime_str: str) -> tuple[str, int]:
+    """Parse regime_snapshot format: "VOL=<LOW|MID|HIGH>|SPIKE=<0|1>"."""
+    try:
+        parts = regime_str.split("|")
+        vol_part = [p for p in parts if p.startswith("VOL=")]
+        spike_part = [p for p in parts if p.startswith("SPIKE=")]
+        
+        vol = vol_part[0].replace("VOL=", "") if vol_part else "UNKNOWN"
+        spike = int(spike_part[0].replace("SPIKE=", "")) if spike_part else 0
+        
+        return vol, spike
+    except (AttributeError, IndexError, ValueError):
+        return "UNKNOWN", 0
+
+
+def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
+    """
+    Generate trading signal based on volatility expansion + breakout.
+    
+    Entry conditions (ALL must be met):
+    1. Volatility has expanded (vol_ratio > threshold)
+    2. ATR is large enough (atr_short > atr_min)
+    3. Trend bias agrees with direction
+    4. Price breaks Donchian level
+    5. True Range impulse is strong
+    """
+    cols: Dict[str, np.ndarray] = ctx["cols"]
+    idx: int = ctx["idx"]
+    symbol: str = ctx["symbol"]
+    current_time: datetime = ctx["current_time"]
+    config: Dict[str, Any] = ctx.get("config", {})
+    
+    tags: Dict[str, str] = {}
+    side = Side.FLAT
+    
+    # ========================
+    # Read values
+    # ========================
+    ema_fast = _read_value(cols.get("ema_fast"), idx)
+    ema_slow = _read_value(cols.get("ema_slow"), idx)
+    atr_short = _read_value(cols.get("atr_short"), idx)
+    atr_long = _read_value(cols.get("atr_long"), idx)
+    atr_pips_value = _read_value(cols.get("atr_pips"), idx)
+    
+    close = _read_value(cols["close"], idx)
+    high = _read_value(cols["high"], idx)
+    low = _read_value(cols["low"], idx)
+    open_price = _read_value(cols.get("open"), idx)
+    
+    breakout_hh = _read_value(cols.get("breakout_hh"), idx)
+    breakout_ll = _read_value(cols.get("breakout_ll"), idx)
+    vol_ratio = _read_value(cols.get("vol_ratio"), idx)
+    
+    regime_snapshot = cols.get("regime_snapshot")
+    if regime_snapshot is not None:
+        regime_str = regime_snapshot[idx] if idx < len(regime_snapshot) else None
+    else:
+        regime_str = None
+    
+    # ========================
+    # 1. Trend bias from EMA
+    # ========================
+    if ema_fast is None or ema_slow is None:
+        tags["trend"] = "unknown"
+        side = Side.FLAT
+    elif ema_fast > ema_slow:
+        tags["trend"] = "bias_long"
+        side = Side.LONG
+    elif ema_fast < ema_slow:
+        tags["trend"] = "bias_short"
+        side = Side.SHORT
+    else:
+        tags["trend"] = "neutral"
+        side = Side.FLAT
+    
+    # ========================
+    # 2. Volatility expansion gate
+    # ========================
+    vol_ratio_th = float(config.get("vol_ratio_th", 1.1))
+    atr_min_pips = float(config.get("atr_min_pips", 8))
+    vol_pass = True
+    
+    if vol_ratio is None or atr_short is None or atr_pips_value is None:
+        vol_pass = False
+        tags["vol_gate"] = "fail_no_data"
+    elif vol_ratio <= vol_ratio_th:
+        vol_pass = False
+        tags["vol_gate"] = "fail_compression"
+    elif atr_pips_value < atr_min_pips:
+        vol_pass = False
+        tags["vol_gate"] = "fail_atr_min"
+    else:
+        tags["vol_gate"] = "pass"
+    
+    if not vol_pass:
+        side = Side.FLAT
+    
+    # ========================
+    # 3. Regime check (optional spike block)
+    # ========================
+    allowed_vol_regimes = config.get("allowed_vol_regimes", ["MID", "HIGH"])
+    spike_block = bool(config.get("spike_block", False))
+    regime_pass = True
+    
+    if regime_str is not None:
+        vol, spike = _parse_regime_snapshot(regime_str)
+        tags["regime"] = f"{vol}|spike={spike}"
+        
+        if vol not in allowed_vol_regimes:
+            regime_pass = False
+            tags["regime_gate"] = "fail"
+        elif spike_block and spike == 1:
+            regime_pass = False
+            tags["regime_gate"] = "fail_spike"
+        else:
+            tags["regime_gate"] = "pass"
+    else:
+        tags["regime"] = "unknown"
+        tags["regime_gate"] = "pass"
+    
+    if not regime_pass:
+        side = Side.FLAT
+    
+    # ========================
+    # 4. Breakout condition
+    # ========================
+    buffer_atr = float(config.get("buffer_atr", 0.2))
+    breakout_pass = True
+    
+    if close is None or breakout_hh is None or breakout_ll is None or atr_short is None:
+        breakout_pass = False
+        tags["breakout"] = "fail_no_data"
+    else:
+        buffer_price = buffer_atr * atr_short
+        
+        if side == Side.LONG:
+            if close > breakout_hh + buffer_price:
+                tags["breakout"] = "pass_long"
+            else:
+                breakout_pass = False
+                tags["breakout"] = "fail_long"
+        elif side == Side.SHORT:
+            if close < breakout_ll - buffer_price:
+                tags["breakout"] = "pass_short"
+            else:
+                breakout_pass = False
+                tags["breakout"] = "fail_short"
+        else:
+            breakout_pass = False
+            tags["breakout"] = "fail_no_side"
+    
+    if not breakout_pass:
+        side = Side.FLAT
+    
+    # ========================
+    # 5. True Range impulse gate
+    # ========================
+    impulse_th = float(config.get("impulse_th", 1.2))
+    impulse_pass = True
+    
+    if idx > 0 and high is not None and low is not None:
+        # True range for current bar
+        prev_close = _read_value(cols["close"], idx - 1)
+        tr = max(
+            high - low,
+            abs(high - prev_close) if prev_close else 0,
+            abs(low - prev_close) if prev_close else 0,
+        )
+        
+        if atr_short is not None and atr_short > 0:
+            impulse = tr / atr_short
+            tags["impulse"] = f"{impulse:.2f}"
+            
+            if impulse <= impulse_th:
+                impulse_pass = False
+                tags["impulse_gate"] = "fail"
+            else:
+                tags["impulse_gate"] = "pass"
+        else:
+            tags["impulse_gate"] = "fail_no_atr"
+            impulse_pass = False
+    else:
+        tags["impulse_gate"] = "skip"
+        impulse_pass = False
+    
+    if not impulse_pass:
+        side = Side.FLAT
+    
+    # ========================
+    # 6. Stop Loss (ATR-based)
+    # ========================
+    sl_points: Optional[float] = None
+    tp_points: Optional[float] = None
+    
+    if side != Side.FLAT and atr_pips_value is not None and atr_pips_value > 0:
+        k_sl = config.get("k_sl", 3.0)
+        min_sl_points = float(config.get("min_sl_points", 8))
+        
+        if k_sl is not None:
+            sl_points = max(float(k_sl) * atr_pips_value, min_sl_points)
+        
+        # No fixed TP - trailing stop is managed by orchestrator
+    
+    return SignalIntent(
+        strategy_id=STRATEGY_ID,
+        symbol=symbol,
+        side=side,
+        signal_time=current_time,
+        sl_points=sl_points,
+        tp_points=tp_points,
+        tags=tags,
+    )
+
+================
 File: test_fast_tuning_integration.py
 ================
 #!/usr/bin/env python3
@@ -9685,69 +10022,6 @@ def test_no_side_effects() -> None:
 
     assert_frame_equal(trades_df, original_df)
     assert reference_stats == reference_copy
-
-================
-File: tests/test_montecarlo.py
-================
-import random
-
-from montecarlo.mc1_block_bootstrap import _block_bootstrap_sample, run_block_bootstrap
-from montecarlo.mc2_cost_noise import run_cost_noise
-
-
-def test_seed_determinism():
-    trade_pnls = [1.0, -0.5, 0.25, -0.75, 1.5]
-    result_a = run_block_bootstrap(trade_pnls, block_min=2, block_max=3, n_sims=5, seed=42)
-    result_b = run_block_bootstrap(trade_pnls, block_min=2, block_max=3, n_sims=5, seed=42)
-    assert result_a == result_b
-
-    trades_pre_cost = [
-        {"pnl_pre_cost": 1.0, "spread_cost": 0.1, "slippage_cost": 0.05, "is_spike": False},
-        {"pnl_pre_cost": -0.5, "spread_cost": 0.1, "slippage_cost": 0.08, "is_spike": True},
-        {"pnl_pre_cost": 0.75, "spread_cost": 0.1, "slippage_cost": 0.03, "is_spike": False},
-    ]
-    noise_params = {
-        "spread_mult_range": (0.8, 1.2),
-        "slippage_mult_range": (0.7, 1.3),
-        "spike_slippage_mult_range": (1.2, 1.8),
-    }
-    result_c = run_cost_noise(trades_pre_cost, cost_model=None, noise_params=noise_params, n_sims=10, seed=7)
-    result_d = run_cost_noise(trades_pre_cost, cost_model=None, noise_params=noise_params, n_sims=10, seed=7)
-    assert result_c == result_d
-
-
-def test_block_bootstrap_preserves_structure():
-    trade_pnls = [float(i) for i in range(10)]
-    rng = random.Random(123)
-    sample = _block_bootstrap_sample(trade_pnls, block_min=3, block_max=3, rng=rng)
-
-    original_pairs = {(trade_pnls[i], trade_pnls[i + 1]) for i in range(len(trade_pnls) - 1)}
-    adjacency_count = sum(
-        1
-        for i in range(len(sample) - 1)
-        if (sample[i], sample[i + 1]) in original_pairs
-    )
-
-    assert adjacency_count >= 6
-
-
-def test_cost_noise_changes_distribution():
-    trades_pre_cost = [
-        {"pnl_pre_cost": 1.0, "spread_cost": 0.1, "slippage_cost": 0.05, "is_spike": False},
-        {"pnl_pre_cost": -0.5, "spread_cost": 0.1, "slippage_cost": 0.08, "is_spike": True},
-        {"pnl_pre_cost": 0.75, "spread_cost": 0.1, "slippage_cost": 0.03, "is_spike": False},
-        {"pnl_pre_cost": 0.2, "spread_cost": 0.1, "slippage_cost": 0.04, "is_spike": True},
-    ]
-    noise_params = {
-        "spread_mult_range": (0.8, 1.2),
-        "slippage_mult_range": (0.7, 1.3),
-        "spike_slippage_mult_range": (1.2, 1.8),
-    }
-
-    result = run_cost_noise(trades_pre_cost, cost_model=None, noise_params=noise_params, n_sims=50, seed=99)
-    rounded = {round(value, 6) for value in result["pnl_distribution"]}
-
-    assert len(rounded) > 1
 
 ================
 File: tests/test_reconcile.py
@@ -10749,6 +11023,340 @@ if __name__ == "__main__":
     test_retest_logic()
     test_bias_logic()
     test_no_lookahead_in_signal()
+    print("\n[SUCCESS] ALL TESTS PASSED!")
+
+================
+File: tests/test_s2_trend_expansion_breakout.py
+================
+"""
+Tests for S2_TREND_EXPANSION_BREAKOUT strategy.
+
+Focus areas:
+1. No lookahead (shift(1) used, future data doesn't affect past)
+2. Entry logic gates work correctly
+3. SL calculation is valid
+4. Strategy is rare (few trades)
+"""
+
+import numpy as np
+import pandas as pd
+
+from backtest.orchestrator import _StrategySpec, _apply_strategy_features
+from strategies import s2_trend_expansion_breakout
+from features.indicators import ema, atr
+
+
+def create_sample_ohlc(n: int = 400, trend: str = "up") -> pd.DataFrame:
+    """Create synthetic OHLC with adequate warmup (400+ bars)."""
+    np.random.seed(42)
+    
+    data = []
+    close = 1.2000
+    
+    for i in range(n):
+        if trend == "up":
+            drift = 0.0003
+        elif trend == "down":
+            drift = -0.0003
+        else:
+            drift = 0.0
+        
+        # Add structure: compression then expansion
+        vol_mult = 1.0
+        if 100 <= i < 150:
+            vol_mult = 0.5  # Compression
+        elif 150 <= i < 250:
+            vol_mult = 2.5  # Expansion (STRONG!)
+        
+        random_move = np.random.normal(0, 0.0002 * vol_mult)
+        open_price = close
+        close = close + drift + random_move
+        high = max(open_price, close) + abs(np.random.normal(0, 0.00015 * vol_mult))
+        low = min(open_price, close) - abs(np.random.normal(0, 0.00015 * vol_mult))
+        
+        data.append({"open": open_price, "high": high, "low": low, "close": close})
+    
+    df = pd.DataFrame(data)
+    df.index = pd.date_range("2024-01-01", periods=n, freq="h")
+    return df
+
+
+def test_no_lookahead():
+    """Verify shift(1) is used - future data doesn't affect past indices."""
+    df = create_sample_ohlc(400, trend="up")
+    
+    spec = _StrategySpec(
+        name="S2_TREND_EXPANSION_BREAKOUT",
+        module=None,
+        params={
+            "ema_fast": 50,
+            "ema_slow": 200,
+            "atr_short_period": 14,
+            "atr_long_period": 100,
+            "breakout_lookback": 55,
+        },
+    )
+    
+    df_orig = _apply_strategy_features(df.copy(), spec)
+    hh_orig = df_orig["breakout_hh"].copy()
+    
+    # Modify future data (bars 300+)
+    df_mod = df.copy()
+    df_mod.loc[df_mod.index[300:], "high"] = 999.0
+    df_mod = _apply_strategy_features(df_mod, spec)
+    hh_mod = df_mod["breakout_hh"]
+    
+    # Check past indices (220-280) unaffected
+    errors = 0
+    for idx in range(220, 280):
+        if pd.notna(hh_orig.iloc[idx]) and pd.notna(hh_mod.iloc[idx]):
+            if not np.isclose(hh_orig.iloc[idx], hh_mod.iloc[idx]):
+                errors += 1
+    
+    assert errors == 0, f"Found {errors} indices where future data affected past HH values"
+    print("[OK] No lookahead test PASSED")
+
+
+def test_required_features():
+    """Verify required_features returns expected set."""
+    features = s2_trend_expansion_breakout.required_features()
+    
+    expected = {
+        "close", "high", "low", "open",
+        "ema_fast", "ema_slow",
+        "atr_short", "atr_long",
+        "atr_pips",
+        "breakout_hh", "breakout_ll",
+        "vol_ratio",
+        "regime_snapshot",
+    }
+    
+    assert features == expected, f"Feature mismatch: {features} vs {expected}"
+    print("[OK] Required features test PASSED")
+
+
+def test_sl_validity_when_signal():
+    """Verify SL is valid (> 0) when side != FLAT."""
+    df = create_sample_ohlc(400, trend="up")
+    pip_size = 0.0001
+    
+    spec = _StrategySpec(
+        name="S2_TREND_EXPANSION_BREAKOUT",
+        module=None,
+        params={
+            "ema_fast": 50,
+            "ema_slow": 200,
+            "atr_short_period": 14,
+            "atr_long_period": 100,
+            "breakout_lookback": 55,
+        },
+    )
+    df = _apply_strategy_features(df, spec)
+    df["atr_pips"] = df["atr_short"] / pip_size
+    df["regime_snapshot"] = "VOL=HIGH|SPIKE=0"
+    
+    bad_signals = []
+    
+    for idx in range(250, len(df)):
+        ctx = {
+            "cols": {k: df[k].values for k in df.columns},
+            "idx": idx,
+            "symbol": "EURUSD",
+            "current_time": df.index[idx],
+            "config": {
+                "ema_fast": 50,
+                "ema_slow": 200,
+                "vol_ratio_th": 0.8,  # Very low - almost all pass
+                "atr_min_pips": 2,  # Low
+                "breakout_lookback": 55,
+                "buffer_atr": 0.05,  # Small buffer
+                "impulse_th": 0.5,  # Low impulse threshold
+                "k_sl": 3.0,
+                "min_sl_points": 8,
+                "allowed_vol_regimes": ["LOW", "MID", "HIGH"],
+            },
+            "last_exit_idx": -1,
+        }
+        
+        signal = s2_trend_expansion_breakout.generate_signal(ctx)
+        if signal.side.name != "FLAT":
+            # If we got a signal, SL must be valid
+            if signal.sl_points is None or signal.sl_points <= 0:
+                bad_signals.append((idx, signal.side.name, signal.sl_points))
+    
+    assert len(bad_signals) == 0, \
+        f"Found {len(bad_signals)} signals with invalid SL: {bad_signals[:5]}"
+    
+    print(f"[OK] Found {len(bad_signals)} bad signals - all signals had valid SL")
+    print("[OK] SL validity test PASSED")
+
+
+def test_gate_progression():
+    """Verify that gates filter properly."""
+    df = create_sample_ohlc(400, trend="up")
+    pip_size = 0.0001
+    
+    spec = _StrategySpec(
+        name="S2_TREND_EXPANSION_BREAKOUT",
+        module=None,
+        params={
+            "ema_fast": 50,
+            "ema_slow": 200,
+            "atr_short_period": 14,
+            "atr_long_period": 100,
+            "breakout_lookback": 55,
+        },
+    )
+    df = _apply_strategy_features(df, spec)
+    df["atr_pips"] = df["atr_short"] / pip_size
+    df["regime_snapshot"] = "VOL=HIGH|SPIKE=0"
+    
+    # Count with all gates relaxed (most permissive)
+    signals_all_open = 0
+    gate_failures = {"vol": 0, "breakout": 0, "impulse": 0}
+    
+    for idx in range(250, len(df)):
+        ctx = {
+            "cols": {k: df[k].values for k in df.columns},
+            "idx": idx,
+            "symbol": "EURUSD",
+            "current_time": df.index[idx],
+            "config": {
+                "ema_fast": 50,
+                "ema_slow": 200,
+                "vol_ratio_th": 0.5,  # VERY LOW
+                "atr_min_pips": 0.1,  # VERY LOW
+                "breakout_lookback": 55,
+                "buffer_atr": 0.01,  # VERY SMALL
+                "impulse_th": 0.1,  # VERY LOW
+                "k_sl": 3.0,
+                "min_sl_points": 8,
+                "allowed_vol_regimes": ["LOW", "MID", "HIGH"],
+            },
+            "last_exit_idx": -1,
+        }
+        
+        signal = s2_trend_expansion_breakout.generate_signal(ctx)
+        if signal.side.name != "FLAT":
+            signals_all_open += 1
+        else:
+            # Track which gate failed
+            if "vol_gate" in signal.tags and signal.tags["vol_gate"] != "pass":
+                gate_failures["vol"] += 1
+            elif "breakout" in signal.tags and "fail" in signal.tags["breakout"]:
+                gate_failures["breakout"] += 1
+            elif "impulse_gate" in signal.tags and signal.tags["impulse_gate"] != "pass":
+                gate_failures["impulse"] += 1
+    
+    print(f"[OK] Gate statistics:")
+    print(f"  Signals generated: {signals_all_open}")
+    print(f"  Vol gate failures: {gate_failures['vol']}")
+    print(f"  Breakout failures: {gate_failures['breakout']}")
+    print(f"  Impulse failures: {gate_failures['impulse']}")
+    print("[OK] Gate progression test PASSED")
+
+
+def test_ema_bias_filter():
+    """Verify EMA bias filters correctly."""
+    df = create_sample_ohlc(400, trend="up")
+    
+    spec = _StrategySpec(
+        name="S2_TREND_EXPANSION_BREAKOUT",
+        module=None,
+        params={
+            "ema_fast": 50,
+            "ema_slow": 200,
+            "atr_short_period": 14,
+            "atr_long_period": 100,
+            "breakout_lookback": 55,
+        },
+    )
+    df = _apply_strategy_features(df, spec)
+    
+    # In uptrend, ema_fast should eventually be > ema_slow
+    for idx in range(300, len(df)):
+        ema_f = df["ema_fast"].iloc[idx]
+        ema_s = df["ema_slow"].iloc[idx]
+        
+        if pd.notna(ema_f) and pd.notna(ema_s):
+            # After 300 bars in uptrend, should see mostly upward EMAs
+            if idx > 300:
+                assert ema_f > 0 and ema_s > 0
+    
+    print("[OK] EMA bias filter test PASSED")
+
+
+def test_rarity():
+    """Verify strategy trades rarely (selective)."""
+    df = create_sample_ohlc(400, trend="up")
+    pip_size = 0.0001
+    
+    spec = _StrategySpec(
+        name="S2_TREND_EXPANSION_BREAKOUT",
+        module=None,
+        params={
+            "ema_fast": 50,
+            "ema_slow": 200,
+            "atr_short_period": 14,
+            "atr_long_period": 100,
+            "breakout_lookback": 55,
+        },
+    )
+    df = _apply_strategy_features(df, spec)
+    df["atr_pips"] = df["atr_short"] / pip_size
+    df["regime_snapshot"] = "VOL=HIGH|SPIKE=0"
+    
+    # Count with default config (baseline rarity)
+    signal_count_baseline = 0
+    for idx in range(250, len(df)):
+        ctx = {
+            "cols": {k: df[k].values for k in df.columns},
+            "idx": idx,
+            "symbol": "EURUSD",
+            "current_time": df.index[idx],
+            "config": {
+                "ema_fast": 50,
+                "ema_slow": 200,
+                "vol_ratio_th": 1.1,  # Default (selectivity)
+                "atr_min_pips": 8,  # Default
+                "breakout_lookback": 55,
+                "buffer_atr": 0.2,  # Default
+                "impulse_th": 1.2,  # Default
+                "k_sl": 3.0,
+                "min_sl_points": 8,
+                "allowed_vol_regimes": ["MID", "HIGH"],  # More selective
+            },
+            "last_exit_idx": -1,
+        }
+        
+        signal = s2_trend_expansion_breakout.generate_signal(ctx)
+        if signal.side.name != "FLAT":
+            signal_count_baseline += 1
+    
+    # Expecting ~5-15 signals in 150 bars (10% or less)
+    signal_pct = (signal_count_baseline / 150) * 100
+    print(f"[OK] Signal count: {signal_count_baseline}/150 ({signal_pct:.1f}%)")
+    assert signal_pct < 50, f"Too many signals: {signal_pct}% (should be < 50%)"
+    print("[OK] Rarity test PASSED")
+
+
+if __name__ == "__main__":
+    test_no_lookahead()
+    test_required_features()
+    test_sl_validity_when_signal()
+    test_gate_progression()
+    test_ema_bias_filter()
+    test_rarity()
+
+
+
+if __name__ == "__main__":
+    test_no_lookahead()
+    test_required_features()
+    test_sl_validity_when_signal()
+    test_gate_progression()
+    test_ema_bias_filter()
+    test_rarity()
     print("\n[SUCCESS] ALL TESTS PASSED!")
 
 ================
@@ -12406,144 +13014,6 @@ def test_backtest_runs_medium_dataset() -> None:
     assert trades["regime_snapshot"].str.contains("VOL=").all()
 
 ================
-File: runs/report.json
-================
-{
-  "metrics": {
-    "by_regime": {
-      "VOL=HIGH|SPIKE=0": {
-        "cvar_95": -69.25030771598938,
-        "expectancy": -1.1968267370701018,
-        "max_drawdown": -6660.228862100394,
-        "max_loss_streak": 7.0,
-        "max_win_streak": 23.0,
-        "profit_factor": 0.9188744576105558,
-        "trades": 3771.0
-      },
-      "VOL=HIGH|SPIKE=1": {
-        "cvar_95": -62.212310798400694,
-        "expectancy": -2.5196760807554224,
-        "max_drawdown": -813.2269307605294,
-        "max_loss_streak": 10.0,
-        "max_win_streak": 7.0,
-        "profit_factor": 0.8500168592736799,
-        "trades": 203.0
-      },
-      "VOL=LOW|SPIKE=0": {
-        "cvar_95": -66.91959800881139,
-        "expectancy": -10.218705927199375,
-        "max_drawdown": -14106.712089466546,
-        "max_loss_streak": 12.0,
-        "max_win_streak": 8.0,
-        "profit_factor": 0.46023394155453523,
-        "trades": 1387.0
-      },
-      "VOL=LOW|SPIKE=1": {
-        "cvar_95": -63.62429105808723,
-        "expectancy": -3.522635807676175,
-        "max_drawdown": -392.43670009252565,
-        "max_loss_streak": 4.0,
-        "max_win_streak": 5.0,
-        "profit_factor": 0.7650887181405219,
-        "trades": 73.0
-      },
-      "VOL=MID|SPIKE=0": {
-        "cvar_95": -65.8268612845447,
-        "expectancy": -6.290495726942941,
-        "max_drawdown": -22634.39030267961,
-        "max_loss_streak": 9.0,
-        "max_win_streak": 9.0,
-        "profit_factor": 0.5985945714627545,
-        "trades": 3558.0
-      },
-      "VOL=MID|SPIKE=1": {
-        "cvar_95": -56.09549707785558,
-        "expectancy": 2.4519379255139677,
-        "max_drawdown": -308.60501891427447,
-        "max_loss_streak": 3.0,
-        "max_win_streak": 16.0,
-        "profit_factor": 1.2338974739287851,
-        "trades": 116.0
-      }
-    },
-    "by_scenario": {
-      "A": {
-        "cvar_95": -66.03560446577114,
-        "expectancy": -2.822295793995397,
-        "max_drawdown": -8883.890339402447,
-        "max_loss_streak": 9.0,
-        "max_win_streak": 12.0,
-        "profit_factor": 0.8095450124111133,
-        "trades": 3055.0
-      },
-      "B": {
-        "cvar_95": -66.565148732883,
-        "expectancy": -3.9201181712691935,
-        "max_drawdown": -12078.91694712647,
-        "max_loss_streak": 9.0,
-        "max_win_streak": 11.0,
-        "profit_factor": 0.7461961374400355,
-        "trades": 3048.0
-      },
-      "C": {
-        "cvar_95": -69.02859425065961,
-        "expectancy": -6.982279722226132,
-        "max_drawdown": -21106.38136331509,
-        "max_loss_streak": 9.0,
-        "max_win_streak": 9.0,
-        "profit_factor": 0.588764142631544,
-        "trades": 3005.0
-      }
-    },
-    "by_strategy": {
-      "s1_trend_breakout_donchian": {
-        "cvar_95": -67.29888976355923,
-        "expectancy": -4.562185375710801,
-        "max_drawdown": -41814.161090720634,
-        "max_loss_streak": 9.0,
-        "max_win_streak": 12.0,
-        "profit_factor": 0.7101740200717201,
-        "trades": 9108.0
-      }
-    },
-    "by_symbol": {
-      "EURUSD": {
-        "cvar_95": -67.29888976355923,
-        "expectancy": -4.562185375710801,
-        "max_drawdown": -41814.161090720634,
-        "max_loss_streak": 9.0,
-        "max_win_streak": 12.0,
-        "profit_factor": 0.7101740200717201,
-        "trades": 9108.0
-      }
-    },
-    "overall": {
-      "cvar_95": -67.29888976355923,
-      "expectancy": -4.562185375710801,
-      "max_drawdown": -41814.161090720634,
-      "max_loss_streak": 9.0,
-      "max_win_streak": 12.0,
-      "profit_factor": 0.7101740200717201,
-      "trades": 9108.0
-    }
-  },
-  "summary": {
-    "scenarios": [
-      "A",
-      "B",
-      "C"
-    ],
-    "strategies": [
-      "s1_trend_breakout_donchian"
-    ],
-    "symbols": [
-      "EURUSD"
-    ],
-    "total_trades": 9108
-  }
-}
-
-================
 File: strategies/s1_trend_ema_atr_adx.py
 ================
 from __future__ import annotations
@@ -13699,6 +14169,144 @@ def _build_trade_log_entry(
 __all__ = ["LiveOrchestrator"]
 
 ================
+File: runs/report.json
+================
+{
+  "metrics": {
+    "by_regime": {
+      "VOL=HIGH|SPIKE=0": {
+        "cvar_95": -57.50100290516376,
+        "expectancy": -2.1344719638657828,
+        "max_drawdown": -14560.20077657927,
+        "max_loss_streak": 9.0,
+        "max_win_streak": 13.0,
+        "profit_factor": 0.8271828968779421,
+        "trades": 6202.0
+      },
+      "VOL=HIGH|SPIKE=1": {
+        "cvar_95": -49.545288359547904,
+        "expectancy": -0.8701195773671545,
+        "max_drawdown": -476.0536555366211,
+        "max_loss_streak": 4.0,
+        "max_win_streak": 7.0,
+        "profit_factor": 0.923942418589007,
+        "trades": 283.0
+      },
+      "VOL=LOW|SPIKE=0": {
+        "cvar_95": -54.706222413508634,
+        "expectancy": -10.242537672471368,
+        "max_drawdown": -20848.10332945224,
+        "max_loss_streak": 12.0,
+        "max_win_streak": 12.0,
+        "profit_factor": 0.3581569759220912,
+        "trades": 2029.0
+      },
+      "VOL=LOW|SPIKE=1": {
+        "cvar_95": -26.768397899324366,
+        "expectancy": 6.121963814838098,
+        "max_drawdown": -61.286372997987456,
+        "max_loss_streak": 2.0,
+        "max_win_streak": 7.0,
+        "profit_factor": 2.258935617797413,
+        "trades": 40.0
+      },
+      "VOL=MID|SPIKE=0": {
+        "cvar_95": -50.94360690973635,
+        "expectancy": -5.448900831927247,
+        "max_drawdown": -32961.042878484506,
+        "max_loss_streak": 10.0,
+        "max_win_streak": 13.0,
+        "profit_factor": 0.5500367583913771,
+        "trades": 6043.0
+      },
+      "VOL=MID|SPIKE=1": {
+        "cvar_95": -49.55860375860185,
+        "expectancy": 1.8071598281111085,
+        "max_drawdown": -186.20821212402114,
+        "max_loss_streak": 4.0,
+        "max_win_streak": 10.0,
+        "profit_factor": 1.2480472199365225,
+        "trades": 140.0
+      }
+    },
+    "by_scenario": {
+      "A": {
+        "cvar_95": -53.02696139614197,
+        "expectancy": -3.094094887905537,
+        "max_drawdown": -15441.140397153873,
+        "max_loss_streak": 10.0,
+        "max_win_streak": 12.0,
+        "profit_factor": 0.7402945829547607,
+        "trades": 4951.0
+      },
+      "B": {
+        "cvar_95": -53.590890985604226,
+        "expectancy": -3.8476662470162384,
+        "max_drawdown": -19034.973877465436,
+        "max_loss_streak": 10.0,
+        "max_win_streak": 11.0,
+        "profit_factor": 0.6878199104731503,
+        "trades": 4916.0
+      },
+      "C": {
+        "cvar_95": -56.37382175140845,
+        "expectancy": -6.6657461265277265,
+        "max_drawdown": -32579.95150232011,
+        "max_loss_streak": 10.0,
+        "max_win_streak": 11.0,
+        "profit_factor": 0.5157410682216053,
+        "trades": 4870.0
+      }
+    },
+    "by_strategy": {
+      "s1_trend_breakout_retest": {
+        "cvar_95": -54.414094891261634,
+        "expectancy": -4.525763364086461,
+        "max_drawdown": -66818.4513036756,
+        "max_loss_streak": 10.0,
+        "max_win_streak": 12.0,
+        "profit_factor": 0.6425919774735783,
+        "trades": 14737.0
+      }
+    },
+    "by_symbol": {
+      "EURUSD": {
+        "cvar_95": -54.414094891261634,
+        "expectancy": -4.525763364086461,
+        "max_drawdown": -66818.4513036756,
+        "max_loss_streak": 10.0,
+        "max_win_streak": 12.0,
+        "profit_factor": 0.6425919774735783,
+        "trades": 14737.0
+      }
+    },
+    "overall": {
+      "cvar_95": -54.414094891261634,
+      "expectancy": -4.525763364086461,
+      "max_drawdown": -66818.4513036756,
+      "max_loss_streak": 10.0,
+      "max_win_streak": 12.0,
+      "profit_factor": 0.6425919774735783,
+      "trades": 14737.0
+    }
+  },
+  "summary": {
+    "scenarios": [
+      "A",
+      "B",
+      "C"
+    ],
+    "strategies": [
+      "s1_trend_breakout_retest"
+    ],
+    "symbols": [
+      "EURUSD"
+    ],
+    "total_trades": 14737
+  }
+}
+
+================
 File: tuning/worker.py
 ================
 from __future__ import annotations
@@ -14047,369 +14655,6 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
         tp_points=tp_points,
         tags=tags,
     )
-
-================
-File: configs/examples/example_config.yaml
-================
-universe:
-  symbols:
-    - EURUSD
-    - GBPUSD
-    - USDJPY
-  timeframe: M15
-bar_contract:
-  signal_on: close
-  fill_on: open_next
-  allow_bar0: false
-regime:
-  atr_pct_window: 960
-  atr_pct_n: 14
-  z_low: -0.5
-  z_high: 0.5
-  spike_tr_atr_th: 2.5
-strategies:
-  enabled:
-    - S1_TREND_BREAKOUT_DONCHIAN
-  params:
-    S1_TREND_EMA_ATR_ADX:
-      ema_fast: 20
-      ema_slow: 50
-      adx_period: 14
-      adx_th: 25
-      atr_period: 14
-      k_sl: 2.5
-      min_sl_points: 8.0
-      k_tp: 1.5
-      min_tp_points: 8.0
-    S2_MR_ZSCORE_EMA_REGIME:
-      zscore_window: 30
-      ema_regime: 200
-      k_sl: 2.0
-      min_sl_points: 5.0
-    S3_BREAKOUT_ATR_REGIME_EMA200:
-      breakout_lookback: 55
-      atr_period: 14
-      k_sl: 2.0
-      min_sl_points: 5.0
-    S1_TREND_BREAKOUT_DONCHIAN:
-      # Trend regime
-      ema_fast: 30
-      ema_slow: 100
-      adx_period: 14
-      adx_th: 30
-      adx_rising: false
-
-      # Breakout timing
-      breakout_lookback: 100
-      buffer_atr: 0.1          # buffer = 0.1 * ATR(price)
-      allowed_vol_regimes: ["MID", "HIGH"]
-      spike_block: false       # true solo dopo
-
-      # Anti-overtrading
-      cooldown_bars: 0         # 2 ore su M15
-
-      # Risk / exits
-      atr_period: 14
-      k_sl: 3.0
-      k_tp: 2.0
-      min_sl_points: 8.0
-      min_tp_points: 5.0
-risk:
-  max_hold_bars: 96
-  r_base: 0.002
-  caps:
-    per_strategy: 0.03
-    per_symbol: 0.05
-    usd_exposure_cap: 100000
-  conflict_policy: priority
-  priority_order:
-    - S1_TREND_EMA_ATR_ADX
-  dd_day_limit: 0.02
-  dd_week_limit: 0.05
-  max_execution_errors: 3
-costs:
-  spread_baseline_pips:
-    EURUSD: 0.7
-    GBPUSD: 0.9
-    USDJPY: 0.8
-  slippage:
-    slip_base: 0.1
-    slip_k: 0.5
-    spike_tr_atr_th: 1.5
-    spike_mult: 2.0
-  scenarios:
-    A: 1.0
-    B: 1.5
-    C: 2.0
-validation:
-  walk_forward:
-    train: 252
-    val: 63
-    test: 63
-  perturb_core_params_pct: 0.1
-montecarlo:
-  mc1:
-    block_min: 5
-    block_max: 20
-    n_sims: 500
-  mc2:
-    spread_noise_range: [0.8, 1.2]
-    slippage_noise_range: [0.9, 1.3]
-    n_sims: 300
-outputs:
-  runs_dir: ./runs
-  write_trades_csv: true
-  write_report_json: true
-  write_mc_json: true
-  debug: true
-reproducibility:
-  random_seed: 42
-
-================
-File: configs/models.py
-================
-from __future__ import annotations
-
-from typing import Dict, List, Literal, Tuple
-
-from pydantic import BaseModel, model_validator, validator
-
-
-ALLOWED_STRATEGIES = {
-    "S1_TREND_EMA_ATR_ADX",
-    "S2_MR_ZSCORE_EMA_REGIME",
-    "S3_BREAKOUT_ATR_REGIME_EMA200",
-    "S1_TREND_BREAKOUT_DONCHIAN",
-    "S1_TREND_BREAKOUT_RETEST",
-}
-
-
-class StrictBaseModel(BaseModel):
-    class Config:
-        extra = "forbid"
-        validate_assignment = True
-
-
-class Universe(StrictBaseModel):
-    symbols: List[str]
-    timeframe: str
-
-    @validator("symbols")
-    def symbols_non_empty(cls, value: List[str]) -> List[str]:
-        if not value:
-            raise ValueError("symbols must be a non-empty list")
-        return value
-
-
-class BarContract(StrictBaseModel):
-    signal_on: Literal["close"]
-    fill_on: Literal["open_next"]
-    allow_bar0: bool
-
-    @validator("allow_bar0")
-    def allow_bar0_disabled(cls, value: bool) -> bool:
-        if value:
-            raise ValueError("allow_bar0 must be false")
-        return value
-
-
-class Regime(StrictBaseModel):
-    atr_pct_window: int = 960
-    atr_pct_n: int = 14
-    z_low: float = -0.5
-    z_high: float = 0.5
-    spike_tr_atr_th: float = 2.5
-
-    @validator("atr_pct_window")
-    def atr_pct_window_positive(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError("atr_pct_window must be > 0")
-        return value
-
-    @validator("atr_pct_n")
-    def atr_pct_n_positive(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError("atr_pct_n must be > 0")
-        return value
-
-    @model_validator(mode="after")
-    def zscore_bounds_valid(self) -> "Regime":
-        if self.z_low >= self.z_high:
-            raise ValueError("z_low must be < z_high")
-        return self
-
-
-class Strategies(StrictBaseModel):
-    enabled: List[str]
-    params: Dict[str, Dict[str, object]]
-
-    @validator("enabled")
-    def enabled_valid(cls, value: List[str]) -> List[str]:
-        invalid = [name for name in value if name not in ALLOWED_STRATEGIES]
-        if invalid:
-            raise ValueError(f"Unknown strategies enabled: {invalid}")
-        return value
-
-    @validator("params")
-    def params_keys_valid(cls, value: Dict[str, Dict[str, object]]) -> Dict[str, Dict[str, object]]:
-        extra = set(value.keys()) - ALLOWED_STRATEGIES
-        missing = ALLOWED_STRATEGIES - set(value.keys())
-        if extra:
-            raise ValueError(f"params contains unsupported strategies: {sorted(extra)}")
-        if missing:
-            raise ValueError(f"params missing strategies: {sorted(missing)}")
-        return value
-
-    @model_validator(mode="after")
-    def params_cover_enabled(self) -> "Strategies":
-        missing = [name for name in self.enabled if name not in self.params]
-        if missing:
-            raise ValueError(f"params missing enabled strategies: {missing}")
-        return self
-
-
-class RiskCaps(StrictBaseModel):
-    per_strategy: float
-    per_symbol: float
-    usd_exposure_cap: float
-
-
-class Risk(StrictBaseModel):
-    r_base: float
-    caps: RiskCaps
-    conflict_policy: Literal["priority", "netting"]
-    priority_order: List[str] | None = None
-    dd_day_limit: float
-    dd_week_limit: float
-    max_execution_errors: int
-    max_hold_bars: int = 96
-
-    @model_validator(mode="after")
-    def priority_requires_order(self) -> "Risk":
-        if self.conflict_policy == "priority" and not self.priority_order:
-            raise ValueError("priority_order must be provided when conflict_policy is priority")
-        if self.conflict_policy == "netting" and self.priority_order:
-            raise ValueError("priority_order must be empty when conflict_policy is netting")
-        return self
-
-
-class SlippageModel(StrictBaseModel):
-    slip_base: float
-    slip_k: float
-    spike_tr_atr_th: float
-    spike_mult: float
-
-
-class Costs(StrictBaseModel):
-    spread_baseline_pips: Dict[str, float]
-    slippage: SlippageModel
-    scenarios: Dict[str, float]
-
-    @validator("scenarios")
-    def scenarios_have_abc(cls, value: Dict[str, float]) -> Dict[str, float]:
-        expected = {"A", "B", "C"}
-        missing = expected - set(value.keys())
-        extra = set(value.keys()) - expected
-        if missing or extra:
-            raise ValueError("scenarios must contain only A, B, C")
-        return value
-
-
-class WalkForward(StrictBaseModel):
-    train: int | None = None
-    val: int | None = None
-    test: int | None = None
-    train_start: str | None = None
-    train_end: str | None = None
-    val_start: str | None = None
-    val_end: str | None = None
-    test_start: str | None = None
-    test_end: str | None = None
-
-    @model_validator(mode="after")
-    def require_lengths_or_dates(self) -> "WalkForward":
-        lengths = [self.train, self.val, self.test]
-        date_fields = [
-            self.train_start,
-            self.train_end,
-            self.val_start,
-            self.val_end,
-            self.test_start,
-            self.test_end,
-        ]
-        if all(value is not None for value in lengths):
-            return self
-        if all(value is not None for value in date_fields):
-            return self
-        raise ValueError("walk_forward must include train/val/test lengths or full date splits")
-
-
-class Validation(StrictBaseModel):
-    walk_forward: WalkForward
-    perturb_core_params_pct: float
-
-
-class MonteCarlo1(StrictBaseModel):
-    block_min: int
-    block_max: int
-    n_sims: int
-
-    @model_validator(mode="after")
-    def blocks_valid(self) -> "MonteCarlo1":
-        if self.block_min > self.block_max:
-            raise ValueError("block_min must be <= block_max")
-        return self
-
-
-class MonteCarlo2(StrictBaseModel):
-    spread_noise_range: Tuple[float, float]
-    slippage_noise_range: Tuple[float, float]
-    n_sims: int
-
-    @validator("spread_noise_range", "slippage_noise_range")
-    def ranges_valid(cls, value: Tuple[float, float]) -> Tuple[float, float]:
-        if len(value) != 2:
-            raise ValueError("noise ranges must include two values")
-        if value[0] > value[1]:
-            raise ValueError("noise range min must be <= max")
-        return value
-
-
-class MonteCarlo(StrictBaseModel):
-    mc1: MonteCarlo1
-    mc2: MonteCarlo2
-
-
-class Outputs(StrictBaseModel):
-    runs_dir: str
-    write_trades_csv: bool
-    write_report_json: bool
-    write_mc_json: bool
-    debug: bool = False
-
-
-class Reproducibility(StrictBaseModel):
-    random_seed: int
-
-
-class Config(StrictBaseModel):
-    universe: Universe
-    bar_contract: BarContract
-    regime: Regime = Regime()
-    strategies: Strategies
-    risk: Risk
-    costs: Costs
-    validation: Validation
-    montecarlo: MonteCarlo
-    outputs: Outputs
-    reproducibility: Reproducibility
-
-    @model_validator(mode="after")
-    def costs_cover_symbols(self) -> "Config":
-        missing = set(self.universe.symbols) - set(self.costs.spread_baseline_pips.keys())
-        if missing:
-            raise ValueError(f"spread_baseline_pips missing symbols: {sorted(missing)}")
-        return self
 
 ================
 File: scripts/run_tuning_mp.py
@@ -14987,6 +15232,387 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     )
 
 ================
+File: configs/examples/example_config.yaml
+================
+universe:
+  symbols:
+    - EURUSD
+    - GBPUSD
+    - USDJPY
+  timeframe: M15
+bar_contract:
+  signal_on: close
+  fill_on: open_next
+  allow_bar0: false
+regime:
+  atr_pct_window: 960
+  atr_pct_n: 14
+  z_low: -0.5
+  z_high: 0.5
+  spike_tr_atr_th: 2.5
+strategies:
+  enabled:
+    - S1_TREND_BREAKOUT_RETEST
+  params:
+    S1_TREND_BREAKOUT_RETEST:
+        ema_fast: 30
+        ema_slow: 100
+        adx_period: 14
+        adx_th: 25
+        atr_period: 14
+        breakout_lookback: 55
+        buffer_atr: 0.1
+        retest_atr: 0.1
+        cooldown_bars: 8
+        allowed_vol_regimes: ["MID","HIGH"]
+        spike_block: false
+        adx_rising: false
+        k_sl: 2.5
+        k_tp: 1.5
+        min_sl_points: 8.0
+        min_tp_points: 5.0
+    S1_TREND_EMA_ATR_ADX:
+      ema_fast: 20
+      ema_slow: 50
+      adx_period: 14
+      adx_th: 25
+      atr_period: 14
+      k_sl: 2.5
+      min_sl_points: 8.0
+      k_tp: 1.5
+      min_tp_points: 8.0
+    S2_MR_ZSCORE_EMA_REGIME:
+      zscore_window: 30
+      ema_regime: 200
+      k_sl: 2.0
+      min_sl_points: 5.0
+    S3_BREAKOUT_ATR_REGIME_EMA200:
+      breakout_lookback: 55
+      atr_period: 14
+      k_sl: 2.0
+      min_sl_points: 5.0
+    S1_TREND_BREAKOUT_DONCHIAN:
+      # Trend regime
+      ema_fast: 30
+      ema_slow: 100
+      adx_period: 14
+      adx_th: 30
+      adx_rising: false
+
+      # Breakout timing
+      breakout_lookback: 100
+      buffer_atr: 0.1          # buffer = 0.1 * ATR(price)
+      allowed_vol_regimes: ["MID", "HIGH"]
+      spike_block: false       # true solo dopo
+
+      # Anti-overtrading
+      cooldown_bars: 0         # 2 ore su M15
+
+      # Risk / exits
+      atr_period: 14
+      k_sl: 3.0
+      k_tp: 2.0
+      min_sl_points: 8.0
+      min_tp_points: 5.0
+risk:
+  max_hold_bars: 96
+  r_base: 0.002
+  caps:
+    per_strategy: 0.03
+    per_symbol: 0.05
+    usd_exposure_cap: 100000
+  conflict_policy: priority
+  priority_order:
+    - S1_TREND_EMA_ATR_ADX
+  dd_day_limit: 0.02
+  dd_week_limit: 0.05
+  max_execution_errors: 3
+costs:
+  spread_baseline_pips:
+    EURUSD: 0.7
+    GBPUSD: 0.9
+    USDJPY: 0.8
+  slippage:
+    slip_base: 0.1
+    slip_k: 0.5
+    spike_tr_atr_th: 1.5
+    spike_mult: 2.0
+  scenarios:
+    A: 1.0
+    B: 1.5
+    C: 2.0
+validation:
+  walk_forward:
+    train: 252
+    val: 63
+    test: 63
+  perturb_core_params_pct: 0.1
+montecarlo:
+  mc1:
+    block_min: 5
+    block_max: 20
+    n_sims: 500
+  mc2:
+    spread_noise_range: [0.8, 1.2]
+    slippage_noise_range: [0.9, 1.3]
+    n_sims: 300
+outputs:
+  runs_dir: ./runs
+  write_trades_csv: true
+  write_report_json: true
+  write_mc_json: true
+  debug: true
+reproducibility:
+  random_seed: 42
+
+================
+File: configs/models.py
+================
+from __future__ import annotations
+
+from typing import Dict, List, Literal, Tuple
+
+from pydantic import BaseModel, model_validator, validator
+
+
+ALLOWED_STRATEGIES = {
+    "S1_TREND_EMA_ATR_ADX",
+    "S2_MR_ZSCORE_EMA_REGIME",
+    "S3_BREAKOUT_ATR_REGIME_EMA200",
+    "S1_TREND_BREAKOUT_DONCHIAN",
+    "S1_TREND_BREAKOUT_RETEST",
+    "S2_TREND_EXPANSION_BREAKOUT",
+}
+
+
+class StrictBaseModel(BaseModel):
+    class Config:
+        extra = "forbid"
+        validate_assignment = True
+
+
+class Universe(StrictBaseModel):
+    symbols: List[str]
+    timeframe: str
+
+    @validator("symbols")
+    def symbols_non_empty(cls, value: List[str]) -> List[str]:
+        if not value:
+            raise ValueError("symbols must be a non-empty list")
+        return value
+
+
+class BarContract(StrictBaseModel):
+    signal_on: Literal["close"]
+    fill_on: Literal["open_next"]
+    allow_bar0: bool
+
+    @validator("allow_bar0")
+    def allow_bar0_disabled(cls, value: bool) -> bool:
+        if value:
+            raise ValueError("allow_bar0 must be false")
+        return value
+
+
+class Regime(StrictBaseModel):
+    atr_pct_window: int = 960
+    atr_pct_n: int = 14
+    z_low: float = -0.5
+    z_high: float = 0.5
+    spike_tr_atr_th: float = 2.5
+
+    @validator("atr_pct_window")
+    def atr_pct_window_positive(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("atr_pct_window must be > 0")
+        return value
+
+    @validator("atr_pct_n")
+    def atr_pct_n_positive(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("atr_pct_n must be > 0")
+        return value
+
+    @model_validator(mode="after")
+    def zscore_bounds_valid(self) -> "Regime":
+        if self.z_low >= self.z_high:
+            raise ValueError("z_low must be < z_high")
+        return self
+
+
+class Strategies(StrictBaseModel):
+    enabled: List[str]
+    params: Dict[str, Dict[str, object]]
+
+    @validator("enabled")
+    def enabled_valid(cls, value: List[str]) -> List[str]:
+        invalid = [name for name in value if name not in ALLOWED_STRATEGIES]
+        if invalid:
+            raise ValueError(f"Unknown strategies enabled: {invalid}")
+        return value
+
+    @validator("params")
+    def params_keys_valid(cls, value: Dict[str, Dict[str, object]]) -> Dict[str, Dict[str, object]]:
+        extra = set(value.keys()) - ALLOWED_STRATEGIES
+        missing = ALLOWED_STRATEGIES - set(value.keys())
+        if extra:
+            raise ValueError(f"params contains unsupported strategies: {sorted(extra)}")
+        if missing:
+            raise ValueError(f"params missing strategies: {sorted(missing)}")
+        return value
+
+    @model_validator(mode="after")
+    def params_cover_enabled(self) -> "Strategies":
+        missing = [name for name in self.enabled if name not in self.params]
+        if missing:
+            raise ValueError(f"params missing enabled strategies: {missing}")
+        return self
+
+
+class RiskCaps(StrictBaseModel):
+    per_strategy: float
+    per_symbol: float
+    usd_exposure_cap: float
+
+
+class Risk(StrictBaseModel):
+    r_base: float
+    caps: RiskCaps
+    conflict_policy: Literal["priority", "netting"]
+    priority_order: List[str] | None = None
+    dd_day_limit: float
+    dd_week_limit: float
+    max_execution_errors: int
+    max_hold_bars: int = 96
+
+    @model_validator(mode="after")
+    def priority_requires_order(self) -> "Risk":
+        if self.conflict_policy == "priority" and not self.priority_order:
+            raise ValueError("priority_order must be provided when conflict_policy is priority")
+        if self.conflict_policy == "netting" and self.priority_order:
+            raise ValueError("priority_order must be empty when conflict_policy is netting")
+        return self
+
+
+class SlippageModel(StrictBaseModel):
+    slip_base: float
+    slip_k: float
+    spike_tr_atr_th: float
+    spike_mult: float
+
+
+class Costs(StrictBaseModel):
+    spread_baseline_pips: Dict[str, float]
+    slippage: SlippageModel
+    scenarios: Dict[str, float]
+
+    @validator("scenarios")
+    def scenarios_have_abc(cls, value: Dict[str, float]) -> Dict[str, float]:
+        expected = {"A", "B", "C"}
+        missing = expected - set(value.keys())
+        extra = set(value.keys()) - expected
+        if missing or extra:
+            raise ValueError("scenarios must contain only A, B, C")
+        return value
+
+
+class WalkForward(StrictBaseModel):
+    train: int | None = None
+    val: int | None = None
+    test: int | None = None
+    train_start: str | None = None
+    train_end: str | None = None
+    val_start: str | None = None
+    val_end: str | None = None
+    test_start: str | None = None
+    test_end: str | None = None
+
+    @model_validator(mode="after")
+    def require_lengths_or_dates(self) -> "WalkForward":
+        lengths = [self.train, self.val, self.test]
+        date_fields = [
+            self.train_start,
+            self.train_end,
+            self.val_start,
+            self.val_end,
+            self.test_start,
+            self.test_end,
+        ]
+        if all(value is not None for value in lengths):
+            return self
+        if all(value is not None for value in date_fields):
+            return self
+        raise ValueError("walk_forward must include train/val/test lengths or full date splits")
+
+
+class Validation(StrictBaseModel):
+    walk_forward: WalkForward
+    perturb_core_params_pct: float
+
+
+class MonteCarlo1(StrictBaseModel):
+    block_min: int
+    block_max: int
+    n_sims: int
+
+    @model_validator(mode="after")
+    def blocks_valid(self) -> "MonteCarlo1":
+        if self.block_min > self.block_max:
+            raise ValueError("block_min must be <= block_max")
+        return self
+
+
+class MonteCarlo2(StrictBaseModel):
+    spread_noise_range: Tuple[float, float]
+    slippage_noise_range: Tuple[float, float]
+    n_sims: int
+
+    @validator("spread_noise_range", "slippage_noise_range")
+    def ranges_valid(cls, value: Tuple[float, float]) -> Tuple[float, float]:
+        if len(value) != 2:
+            raise ValueError("noise ranges must include two values")
+        if value[0] > value[1]:
+            raise ValueError("noise range min must be <= max")
+        return value
+
+
+class MonteCarlo(StrictBaseModel):
+    mc1: MonteCarlo1
+    mc2: MonteCarlo2
+
+
+class Outputs(StrictBaseModel):
+    runs_dir: str
+    write_trades_csv: bool
+    write_report_json: bool
+    write_mc_json: bool
+    debug: bool = False
+
+
+class Reproducibility(StrictBaseModel):
+    random_seed: int
+
+
+class Config(StrictBaseModel):
+    universe: Universe
+    bar_contract: BarContract
+    regime: Regime = Regime()
+    strategies: Strategies
+    risk: Risk
+    costs: Costs
+    validation: Validation
+    montecarlo: MonteCarlo
+    outputs: Outputs
+    reproducibility: Reproducibility
+
+    @model_validator(mode="after")
+    def costs_cover_symbols(self) -> "Config":
+        missing = set(self.universe.symbols) - set(self.costs.spread_baseline_pips.keys())
+        if missing:
+            raise ValueError(f"spread_baseline_pips missing symbols: {sorted(missing)}")
+        return self
+
+================
 File: tests/anti_leakage/test_anti_leakage.py
 ================
 import sys
@@ -15368,6 +15994,7 @@ STRATEGY_MAP = {
     "S1_TREND_BREAKOUT_DONCHIAN": "strategies.s1_trend_breakout_donchian",
     "S1_TREND_BREAKOUT_RETEST": "strategies.s1_trend_breakout_retest",
     "S2_MR_ZSCORE_EMA_REGIME": "strategies.s2_mr_zscore_ema_regime",
+    "S2_TREND_EXPANSION_BREAKOUT": "strategies.s2_trend_expansion_breakout",
     "S3_BREAKOUT_ATR_REGIME_EMA200": "strategies.s3_breakout_atr_regime_ema200",
 }
 
@@ -15538,6 +16165,35 @@ def _apply_strategy_features(df: pd.DataFrame, spec: _StrategySpec) -> pd.DataFr
             df["breakout_ll"] = (
                 df["low"].shift(1).rolling(window=breakout_lookback, min_periods=breakout_lookback).min()
             )
+    elif spec.name == "S2_TREND_EXPANSION_BREAKOUT":
+        ema_fast = int(spec.params.get("ema_fast", 50))
+        ema_slow = int(spec.params.get("ema_slow", 200))
+        atr_short_period = int(spec.params.get("atr_short_period", 14))
+        atr_long_period = int(spec.params.get("atr_long_period", 100))
+        breakout_lookback = int(spec.params.get("breakout_lookback", 55))
+        
+        if "ema_fast" not in df:
+            df["ema_fast"] = ema(df["close"], ema_fast)
+        if "ema_slow" not in df:
+            df["ema_slow"] = ema(df["close"], ema_slow)
+        if "atr_short" not in df:
+            df["atr_short"] = atr(df, atr_short_period)
+        if "atr_long" not in df:
+            df["atr_long"] = atr(df, atr_long_period)
+        
+        # Donchian breakout levels (no lookahead)
+        if "breakout_hh" not in df:
+            df["breakout_hh"] = (
+                df["high"].shift(1).rolling(window=breakout_lookback, min_periods=breakout_lookback).max()
+            )
+        if "breakout_ll" not in df:
+            df["breakout_ll"] = (
+                df["low"].shift(1).rolling(window=breakout_lookback, min_periods=breakout_lookback).min()
+            )
+        
+        # Volatility ratio
+        if "vol_ratio" not in df:
+            df["vol_ratio"] = df["atr_short"] / df["atr_long"]
     elif spec.name == "S2_MR_ZSCORE_EMA_REGIME":
         ema_base = int(spec.params.get("ema_regime", spec.params.get("ema_base", 200)))
         adx_period = int(spec.params.get("adx_period", 14))

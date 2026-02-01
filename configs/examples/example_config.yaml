@@ -78,6 +78,20 @@ strategies:
       k_tp: 2.0
       min_sl_points: 8.0
       min_tp_points: 5.0
+    S2_TREND_EXPANSION_BREAKOUT:
+      ema_fast: 50
+      ema_slow: 200
+      atr_short_period: 14
+      atr_long_period: 100
+      breakout_lookback: 55
+      buffer_atr: 0.2
+      vol_ratio_th: 1.1
+      impulse_th: 1.2
+      k_sl: 3.0
+      min_sl_points: 8.0
+      k_trail: 3.5
+      max_hold_bars: 96
+      min_mfe_atr: 0.5
 risk:
   max_hold_bars: 96
   r_base: 0.002
