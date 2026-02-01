@@ -21,18 +21,64 @@ import pandas as pd
 import json
 
 
+def test_mt5_date_prefilter_skips_old_years():
+    """Test that start/end date filtering skips old years without parsing timestamps."""
+    print("\n[TEST] MT5 date pre-filter skips old years efficiently...")
+    
+    # Create synthetic MT5 file with explicit chunks: old and new data
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, newline='') as f:
+        # Write header (TAB-separated for C engine)
+        f.write("<DATE>\t<TIME>\t<BID>\t<ASK>\t<LAST>\t<VOLUME>\t<FLAGS>\n")
+        # Chunk 1: Old years (2011-2023)
+        for year in [2011, 2015, 2020, 2023]:
+            f.write(f"{year}.01.15\t00:00:00.000\t1.30328\t1.30342\t1.30335\t6\t0\n")
+        # Chunk 2: New year (2024)
+        for day in range(1, 4):
+            f.write(f"2024.01.{day:02d}\t00:00:00.000\t1.30328\t1.30342\t1.30335\t6\t0\n")
+        temp_file = f.name
+    
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from tick_edge_scan import load_ticks
+        
+        # Load with start date filter for 2024 only
+        # Use a small chunksize so old data is in one chunk and new data in another
+        df_bars, stats = load_ticks(
+            temp_file, 
+            chunksize=100,  # Small chunk to separate old/new data
+            start_date='2024-01-01', 
+            verbose=False
+        )
+        
+        # Verify only 2024 data was kept
+        assert len(df_bars) >= 1, "Expected at least 1 minute bar from 2024 data"
+        assert stats['date_range'][0].year == 2024, f"Expected year 2024, got {stats['date_range'][0].year}"
+        
+        # Verify that rows were filtered out
+        assert stats['rows_filtered'] < stats['rows_read'], \
+            f"Expected some rows filtered: read {stats['rows_read']}, filtered {stats['rows_filtered']}"
+        
+        print(f"  Read {stats['rows_read']} total rows, kept {stats['rows_filtered']} after date filter")
+        print(f"  Skipped {stats['chunks_skipped']} chunks with old data")
+        print("  PASS: Date pre-filter efficiently filters old years")
+        return True
+        
+    finally:
+        os.unlink(temp_file)
+
+
 def test_mt5_format_parsing():
     """Test that MT5 angle-bracket column names and whitespace separator work."""
     print("\n[TEST] MT5 format parsing (<DATE> <TIME> <BID> <ASK> with whitespace sep)...")
     
     # Create synthetic MT5-style CSV with angle bracket column names and whitespace separation
     with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, newline='') as f:
-        # MT5 header with angle brackets, space/tab separated
-        f.write("<DATE>      <TIME>          <BID>   <ASK>   <LAST>  <VOLUME>    <FLAGS>\n")
-        # Sample rows: whitespace-separated (MT5 actual export)
-        f.write("2011.12.19  00:00:08.000    1.30328 1.30342 1.30335 6           0\n")
-        f.write("2011.12.19  00:00:09.000    1.30333 1.30347 1.30340 5           0\n")
-        f.write("2011.12.19  00:00:10.000    1.30330 1.30344 1.30337 4           0\n")
+        # MT5 header with angle brackets, TAB-separated (C engine requirement)
+        f.write("<DATE>\t<TIME>\t<BID>\t<ASK>\t<LAST>\t<VOLUME>\t<FLAGS>\n")
+        # Sample rows: TAB-separated (MT5 actual export)
+        f.write("2011.12.19\t00:00:08.000\t1.30328\t1.30342\t1.30335\t6\t0\n")
+        f.write("2011.12.19\t00:00:09.000\t1.30333\t1.30347\t1.30340\t5\t0\n")
+        f.write("2011.12.19\t00:00:10.000\t1.30330\t1.30344\t1.30337\t4\t0\n")
         temp_file = f.name
     
     try:
@@ -52,7 +98,7 @@ def test_mt5_format_parsing():
         
         # Verify tick data was parsed
         assert stats['rows_read'] >= 3, f"Expected at least 3 rows read, got {stats['rows_read']}"
-        assert stats['rows_processed'] >= 3, f"Expected at least 3 rows processed, got {stats['rows_processed']}"
+        assert stats['rows_filtered'] >= 3, f"Expected at least 3 rows filtered, got {stats['rows_filtered']}"
         
         # Verify BID/ASK values are correct
         assert df_bars['bid_open'].iloc[0] > 1.3, "BID value seems wrong"
@@ -247,8 +293,9 @@ def test_mt5_csv_fixture():
     print("\n[TEST] MT5 CSV with partial quote updates...")
     
     # Create synthetic MT5-style CSV with TAB separation
+    # NOTE: MT5 exports use <ANGLE> brackets for column names
     with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, newline='') as f:
-        f.write("DATE\tTIME\tBID\tASK\tLAST\tVOLUME\tFLAGS\n")
+        f.write("<DATE>\t<TIME>\t<BID>\t<ASK>\t<LAST>\t<VOLUME>\t<FLAGS>\n")
         # Row 1: full quote
         f.write("2023.01.15\t09:00:00.000\t1.09000\t1.09020\t1.09015\t100\t0\n")
         # Row 2: missing ASK (bid-only update)
@@ -274,7 +321,7 @@ def test_mt5_csv_fixture():
         
         assert len(df_bars) > 0, "Should produce minute bars"
         assert stats['rows_read'] > 0, "Should count rows read"
-        assert stats['rows_processed'] > 0, "Should count rows processed"
+        assert stats['rows_filtered'] > 0, "Should count rows filtered"
         
         # Check that ticks with valid quotes are present
         assert df_bars['spread_mean'].notna().sum() > 0, "Should have spreads where both bid+ask present"
@@ -291,8 +338,9 @@ def test_mt5_fast_datetime_fail_safe():
     print("\n[TEST] Fast datetime parsing with corrupt data...")
     
     # Create a CSV with high corruption rate (~4%, which exceeds 0.1% fail-fast threshold)
+    # NOTE: MT5 exports use <ANGLE> brackets for column names
     with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, newline='') as f:
-        f.write("DATE\tTIME\tBID\tASK\tLAST\tVOLUME\tFLAGS\n")
+        f.write("<DATE>\t<TIME>\t<BID>\t<ASK>\t<LAST>\t<VOLUME>\t<FLAGS>\n")
         for i in range(100):
             if i % 25 == 0:
                 # Corrupt row (should be dropped, ~4% corruption)
@@ -378,6 +426,7 @@ def main():
     print("="*70)
     
     tests = [
+        test_mt5_date_prefilter_skips_old_years,
         test_mt5_format_parsing,
         test_mt5_datetime_parsing,
         test_quote_reconstruction,

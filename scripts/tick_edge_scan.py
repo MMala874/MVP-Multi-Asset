@@ -292,17 +292,16 @@ def load_ticks(tick_file, chunksize=2_000_000, max_quote_age_ms=2000,
     """
     Stream-friendly MT5 tick CSV loader for massive exports (15GB+).
     
-    Format: Whitespace-separated columns <DATE> <TIME> <BID> <ASK> <LAST> <VOLUME> <FLAGS>
+    Format: TAB-separated columns <DATE> <TIME> <BID> <ASK> <LAST> <VOLUME> <FLAGS>
     DATE format: YYYY.MM.DD
     TIME format: HH:MM:SS.mmm
     
-    Handles:
-    - MT5 column names with angle brackets (<DATE>, <TIME>, etc.)
-    - Partial quote updates (missing BID/ASK)
+    Optimizations:
+    - C-engine tab parsing (fast)
+    - Pre-filter by DATE string before datetime parsing (avoids old years)
+    - Fast datetime parsing (exact format, no fallback)
     - Quote reconstruction with max_quote_age_ms constraint
     - Chunked reading for memory efficiency
-    - Date filtering while streaming
-    - Fast datetime parsing (exact format, no fallback)
     
     Returns: (df_minute_bars, stats_dict)
     """
@@ -312,15 +311,21 @@ def load_ticks(tick_file, chunksize=2_000_000, max_quote_age_ms=2000,
         print(f"[MT5 Loader] Reading {tick_file}...")
         print(f"  Chunk size: {chunksize:,}, max_quote_age: {max_quote_age_ms}ms")
     
-    # Parse date filters if provided
-    start_dt = pd.to_datetime(start_date) if start_date else None
-    end_dt = pd.to_datetime(end_date) if end_date else None
+    # Convert date filters to string format (YYYY.MM.DD) for fast pre-filtering
+    start_date_str = None
+    end_date_str = None
+    if start_date:
+        start_date_str = pd.to_datetime(start_date).strftime('%Y.%m.%d')
+    if end_date:
+        end_date_str = pd.to_datetime(end_date).strftime('%Y.%m.%d')
     
     # Track stats
     total_rows_read = 0
     total_rows_processed = 0
+    total_rows_filtered = 0
     total_minutes_built = 0
     nat_count = 0
+    chunks_skipped = 0
     
     # Streaming minute bar aggregation
     all_minute_bars = []
@@ -328,59 +333,67 @@ def load_ticks(tick_file, chunksize=2_000_000, max_quote_age_ms=2000,
     chunk_num = 0
     for chunk in pd.read_csv(
         tick_file,
-        sep=r'\s+',
-        engine='python',
+        sep="\t",
+        engine="c",
         header=0,
         chunksize=chunksize,
-        na_values=[''],
+        na_values=[""],
+        dtype={
+            "<DATE>": "string",
+            "<TIME>": "string",
+            "<BID>": "float64",
+            "<ASK>": "float64",
+        },
     ):
         chunk_num += 1
         
-        # Handle both MT5 format (<DATE>, <TIME>) and simple format (DATE, TIME)
-        # If the dataframe is empty after reading, skip
-        if len(chunk) == 0:
-            continue
+        # Filter to required columns (handle case where <FLAGS> might be missing)
+        required_cols = ["<DATE>", "<TIME>", "<BID>", "<ASK>"]
+        optional_cols = ["<FLAGS>"]
         
-        # Rename MT5 columns from <DATE>, <TIME>, etc. to internal standardized names
-        rename_map = {}
-        dtype_map = {}
+        cols_to_keep = [c for c in required_cols if c in chunk.columns]
+        cols_to_keep += [c for c in optional_cols if c in chunk.columns]
         
-        for col in chunk.columns:
-            if col == '<DATE>':
-                rename_map['<DATE>'] = 'DATE'
-            elif col == '<TIME>':
-                rename_map['<TIME>'] = 'TIME'
-            elif col == '<BID>':
-                rename_map['<BID>'] = 'BID'
-                dtype_map['BID'] = 'float64'
-            elif col == '<ASK>':
-                rename_map['<ASK>'] = 'ASK'
-                dtype_map['ASK'] = 'float64'
-            elif col == '<FLAGS>':
-                rename_map['<FLAGS>'] = 'FLAGS'
-            elif col == 'BID':
-                dtype_map['BID'] = 'float64'
-            elif col == 'ASK':
-                dtype_map['ASK'] = 'float64'
+        if len(cols_to_keep) < len(required_cols):
+            raise ValueError(f"Missing required columns. Required: {required_cols}, Found: {list(chunk.columns)}")
         
-        # Apply column renaming
-        chunk.rename(columns=rename_map, inplace=True)
-        
-        # Apply dtype conversions
-        for col, dtype in dtype_map.items():
-            if col in chunk.columns:
-                chunk[col] = chunk[col].astype(dtype, errors='ignore')
-        
-        # Verify required columns exist
-        if 'DATE' not in chunk.columns or 'TIME' not in chunk.columns or 'BID' not in chunk.columns or 'ASK' not in chunk.columns:
-            raise ValueError(f"Missing required columns. Found: {list(chunk.columns)}")
-        
+        chunk = chunk[cols_to_keep].copy()
         total_rows_read += len(chunk)
         
-        # Fast datetime parsing: DATE + TIME with exact format
-        chunk['timestamp'] = chunk.apply(
-            lambda row: parse_mt5_datetime(str(row['DATE']), str(row['TIME'])),
-            axis=1
+        # FAST PRE-FILTER: Skip chunks entirely before start_date or after end_date
+        # This avoids parsing timestamps for entire years when user asks for --start 2024
+        if start_date_str is not None or end_date_str is not None:
+            chunk_min_date = chunk["<DATE>"].min()
+            chunk_max_date = chunk["<DATE>"].max()
+            
+            # Skip chunk if entirely before start date
+            if start_date_str is not None and chunk_max_date < start_date_str:
+                chunks_skipped += 1
+                if verbose and chunk_num % progress_every_chunks == 0:
+                    print(f"  [Chunk {chunk_num}] Skipped (before {start_date_str}): "
+                          f"{chunk_min_date} to {chunk_max_date}")
+                continue
+            
+            # Break early if chunk is entirely after end date
+            if end_date_str is not None and chunk_min_date > end_date_str:
+                if verbose:
+                    print(f"  [Chunk {chunk_num}] Breaking (past {end_date_str})")
+                break
+        
+        # Immediately rename columns from <DATE> to DATE, etc.
+        chunk.rename(columns={
+            "<DATE>": "DATE",
+            "<TIME>": "TIME",
+            "<BID>": "BID",
+            "<ASK>": "ASK",
+            "<FLAGS>": "FLAGS",
+        }, inplace=True)
+        
+        # Fast datetime parsing: DATE + " " + TIME with exact format
+        chunk['timestamp'] = pd.to_datetime(
+            chunk['DATE'].astype(str) + " " + chunk['TIME'].astype(str),
+            format="%Y.%m.%d %H:%M:%S.%f",
+            errors='coerce'
         )
         
         # Check for NaT (parsing failures)
@@ -393,13 +406,22 @@ def load_ticks(tick_file, chunksize=2_000_000, max_quote_age_ms=2000,
         # Drop NaT rows
         chunk = chunk[~nat_mask].copy()
         
-        # Apply date filters if provided
-        if start_dt is not None:
-            chunk = chunk[chunk['timestamp'] >= start_dt]
-        if end_dt is not None:
-            chunk = chunk[chunk['timestamp'] <= end_dt]
+        # Apply timestamp-based date filters (for rows within chunk date range)
+        if start_date_str is not None:
+            chunk = chunk[chunk['timestamp'] >= pd.to_datetime(start_date_str)]
+        if end_date_str is not None:
+            chunk = chunk[chunk['timestamp'] <= pd.to_datetime(end_date_str)]
         
-        total_rows_processed += len(chunk)
+        rows_after_filter = len(chunk)
+        total_rows_filtered += rows_after_filter
+        total_rows_processed += total_rows_read  # cumulative
+        
+        # Progress logging (happens immediately, not waiting for N chunks)
+        if verbose:
+            elapsed = (datetime.now() - start_time_total).total_seconds()
+            rows_per_sec = total_rows_read / elapsed if elapsed > 0 else 0
+            print(f"  [Chunk {chunk_num}] Read {total_rows_read:,} total, "
+                  f"kept {total_rows_filtered:,}, {elapsed:.1f}s, {rows_per_sec:,.0f} rows/sec")
         
         if len(chunk) == 0:
             continue
@@ -419,13 +441,6 @@ def load_ticks(tick_file, chunksize=2_000_000, max_quote_age_ms=2000,
         chunk_minute_bars = aggregate_ticks_to_minutes(chunk, verbose=False)
         all_minute_bars.append(chunk_minute_bars)
         total_minutes_built += len(chunk_minute_bars)
-        
-        # Progress logging
-        if chunk_num % progress_every_chunks == 0 and verbose:
-            elapsed = (datetime.now() - start_time_total).total_seconds()
-            rows_per_sec = total_rows_read / elapsed if elapsed > 0 else 0
-            print(f"  [Chunk {chunk_num}] Processed {total_rows_processed:,} rows, "
-                  f"{total_minutes_built:,} minutes, {elapsed:.1f}s, {rows_per_sec:,.0f} rows/sec")
     
     # Concatenate all minute bars and sort by time
     if not all_minute_bars:
@@ -449,8 +464,9 @@ def load_ticks(tick_file, chunksize=2_000_000, max_quote_age_ms=2000,
     
     stats = {
         'rows_read': total_rows_read,
-        'rows_processed': total_rows_processed,
+        'rows_filtered': total_rows_filtered,
         'nat_dropped': nat_count,
+        'chunks_skipped': chunks_skipped,
         'minutes_built': len(df_bars),
         'elapsed_sec': elapsed_total,
         'rows_per_sec': total_rows_read / elapsed_total if elapsed_total > 0 else 0,
@@ -459,8 +475,8 @@ def load_ticks(tick_file, chunksize=2_000_000, max_quote_age_ms=2000,
     
     if verbose:
         print(f"[MT5 Loader] Complete: {len(df_bars):,} minute bars")
-        print(f"  Rows read: {stats['rows_read']:,}, Processed: {stats['rows_processed']:,}, "
-              f"NaT dropped: {stats['nat_dropped']}")
+        print(f"  Rows read: {stats['rows_read']:,}, Filtered to: {stats['rows_filtered']:,}, "
+              f"NaT dropped: {stats['nat_dropped']}, Chunks skipped: {stats['chunks_skipped']}")
         print(f"  Elapsed: {elapsed_total:.2f}s ({stats['rows_per_sec']:,.0f} rows/sec)")
         print(f"  Date range: {stats['date_range'][0]} to {stats['date_range'][1]}")
     
