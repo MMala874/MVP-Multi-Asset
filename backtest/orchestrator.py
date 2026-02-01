@@ -30,6 +30,7 @@ STRATEGY_MAP = {
     "S3_BREAKOUT_ATR_REGIME_EMA200": "strategies.s3_breakout_atr_regime_ema200",
     "S3_TS_MOM_VOL_REGIME": "strategies.s3_ts_mom_vol_regime",
     "S3_TS_MOM_H1_FILTER": "strategies.s3_ts_mom_h1_filter",
+    "S4_TREND_COND_MEAN_REVERSION": "strategies.s4_trend_cond_mean_reversion",
 }
 
 
@@ -344,6 +345,49 @@ def _apply_strategy_features(df: pd.DataFrame, spec: _StrategySpec) -> pd.DataFr
                     0.0  # FLAT
                 )
             )
+    elif spec.name == "S4_TREND_COND_MEAN_REVERSION":
+        # Trend-conditioned mean reversion using H1 bias + M15 z-score
+        ema_base_period = int(spec.params.get("ema_base_period", 200))
+        z_window = int(spec.params.get("z_window", 30))
+        atr_period = int(spec.params.get("atr_period", 14))
+        adx_period_m15 = int(spec.params.get("adx_period_m15", 14))
+        slope_window = int(spec.params.get("slope_window", 20))
+        
+        # EMA baseline for mean reversion
+        if "ema_base" not in df:
+            df["ema_base"] = ema(df["close"], ema_base_period)
+        
+        # Mean reversion delta
+        if "mr_delta" not in df:
+            df["mr_delta"] = df["close"] - df["ema_base"]
+        
+        # Mean reversion z-score (backward-only, no lookahead)
+        if "mr_z" not in df:
+            rolling = df["mr_delta"].rolling(window=z_window, min_periods=z_window)
+            mean = rolling.mean()
+            std = rolling.std(ddof=0)
+            df["mr_z"] = (df["mr_delta"] - mean) / std
+            df.loc[std == 0, "mr_z"] = np.nan
+        
+        # ATR for stops
+        if "atr" not in df:
+            df["atr"] = atr(df, atr_period)
+        
+        pip_size = PIP_SIZES.get(symbol, 0.0001)
+        if "atr_pips" not in df:
+            df["atr_pips"] = df["atr"] / pip_size
+        
+        # M15 ADX for chop gate
+        if "adx_m15" not in df:
+            df["adx_m15"] = adx(df, adx_period_m15)
+        
+        # EMA slope for chop gate
+        if "ema_slope" not in df:
+            df["ema_slope"] = slope(df["ema_base"], slope_window)
+        
+        # Ensure H1 bias column exists (for backward compat if H1 not merged)
+        if "trend_bias_h1" not in df:
+            df["trend_bias_h1"] = np.nan
     return df
 
 
