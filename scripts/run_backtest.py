@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import importlib
 from pathlib import Path
 from typing import Dict
 
 import pandas as pd
 
 from backtest import BacktestOrchestrator
+from backtest.orchestrator import STRATEGY_MAP
 from configs.loader import load_config
 from data.io import load_ohlc_csv, merge_h1_to_m15, prepare_h1_features
 
@@ -55,27 +57,38 @@ def _load_symbols(args: argparse.Namespace, cfg) -> Dict[str, pd.DataFrame]:
         "USDJPY": (args.usdjpy, args.usdjpy_h1),
     }
     
-    # Detect which enabled strategy needs H1 filter
-    h1_needed_strategy = None
+    # Check if any enabled strategy requires H1 merge by checking required_features()
+    h1_needed = False
     h1_params = {}
+    
     for strategy_id in cfg.strategies.enabled:
-        if "H1_FILTER" in strategy_id or strategy_id == "S3_TS_MOM_H1_FILTER":
-            h1_needed_strategy = strategy_id
-            # Read H1 params from config
-            strategy_params = cfg.strategies.params.get(strategy_id, {})
-            h1_params = {
-                "ema_fast": int(strategy_params.get("ema_fast_h1", 50)),
-                "ema_slow": int(strategy_params.get("ema_slow_h1", 200)),
-                "adx_th": float(strategy_params.get("adx_th_h1", 20.0)),
-                "adx_period": int(strategy_params.get("adx_period_h1", 14)),
-            }
-            break
+        try:
+            # Dynamically import strategy module
+            module_path = STRATEGY_MAP.get(strategy_id)
+            if module_path:
+                module = importlib.import_module(module_path)
+                if hasattr(module, "required_features"):
+                    required_features = module.required_features()
+                    if "trend_bias_h1" in required_features:
+                        h1_needed = True
+                        # Extract H1 parameters from config for this strategy
+                        strategy_params = cfg.strategies.params.get(strategy_id, {})
+                        h1_params = {
+                            "ema_fast": int(strategy_params.get("ema_fast_h1", 50)),
+                            "ema_slow": int(strategy_params.get("ema_slow_h1", 200)),
+                            "adx_th": float(strategy_params.get("adx_th_h1", 20.0)),
+                            "adx_period": int(strategy_params.get("adx_period_h1", 14)),
+                        }
+                        break
+        except (ImportError, AttributeError):
+            # Strategy module doesn't exist or doesn't have required_features
+            pass
     
     for symbol, (path_m15, path_h1) in mapping.items():
         if path_m15:
             df_m15 = load_ohlc_csv(path_m15)
-            # Optionally merge H1 filter if strategy needs it and H1 data provided
-            if h1_needed_strategy and path_h1:
+            # Optionally merge H1 filter if a strategy needs it and H1 data provided
+            if h1_needed and path_h1:
                 df_h1 = load_ohlc_csv(path_h1)
                 # Prepare H1 features with config-driven params
                 # prepare_h1_features handles shift(1) for no-lookahead internally
@@ -87,6 +100,13 @@ def _load_symbols(args: argparse.Namespace, cfg) -> Dict[str, pd.DataFrame]:
                     adx_period=h1_params["adx_period"],
                 )
                 df_m15 = merge_h1_to_m15(df_m15, df_h1)
+                
+                # Validate that trend_bias_h1 exists and is not all NaN
+                if "trend_bias_h1" not in df_m15.columns:
+                    raise ValueError(f"After H1 merge for {symbol}: 'trend_bias_h1' column missing!")
+                if df_m15["trend_bias_h1"].isna().all():
+                    print(f"WARNING: {symbol}: 'trend_bias_h1' is all-NaN after merge. H1 data may be misaligned.")
+            
             df_by_symbol[symbol] = df_m15
     return df_by_symbol
 
