@@ -16,7 +16,7 @@ regime:
   spike_tr_atr_th: 2.5
 strategies:
   enabled:
-    - S2_TREND_EXPANSION_BREAKOUT
+    - S3_TS_MOM_VOL_REGIME
   params:
     S1_TREND_BREAKOUT_RETEST:
         ema_fast: 30

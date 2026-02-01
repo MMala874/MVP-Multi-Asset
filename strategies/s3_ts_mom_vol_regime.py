@@ -8,8 +8,7 @@ Anti-lookahead: signal on close(t), fill on open(t+1).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict
+from typing import Any, Dict
 
 import numpy as np
 import pandas as pd
@@ -20,18 +19,7 @@ from desk_types import SignalIntent, Side
 STRATEGY_ID = "S3_TS_MOM_VOL_REGIME"
 
 
-@dataclass
-class MomSignalContext:
-    """Input context for momentum signal generation."""
-    cols: Dict[str, np.ndarray]  # {col_name: np.array}
-    idx: int
-    symbol: str
-    current_time: pd.Timestamp
-    config: object
-    regime_snapshot: str
-
-
-def generate_signal(ctx: MomSignalContext) -> SignalIntent:
+def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     """
     Generate momentum-based signal with volatility regime gating.
     
@@ -42,9 +30,15 @@ def generate_signal(ctx: MomSignalContext) -> SignalIntent:
     - tags: dict of signal metadata
     """
     
-    # Extract parameters from config
-    spec_params = _get_strategy_params(ctx.config, STRATEGY_ID)
+    # Extract context fields
+    cols = ctx.get("cols", {})
+    idx = ctx.get("idx", -1)
+    symbol = ctx.get("symbol", "")
+    current_time = ctx.get("current_time", None)
+    spec_params = ctx.get("config", {})
+    regime_snapshot = ctx.get("regime_snapshot", "")
     
+    # Extract parameters from strategy config
     mom_window = int(spec_params.get("mom_window", 96))
     mom_th = float(spec_params.get("mom_th", 0.0))
     vol_ratio_th = float(spec_params.get("vol_ratio_th", 1.1))
@@ -59,59 +53,59 @@ def generate_signal(ctx: MomSignalContext) -> SignalIntent:
     # Ensure required columns exist
     required = ["mom", "vol_ratio", "atr_pips", "regime_snapshot"]
     for col in required:
-        if col not in ctx.cols:
+        if col not in cols:
             tags_list.append(f"missing_{col}")
             return SignalIntent(
                 strategy_id=STRATEGY_ID,
-                symbol=ctx.symbol,
+                symbol=symbol,
                 side=Side.FLAT,
-                signal_time=ctx.current_time,
+                signal_time=current_time,
                 sl_points=None,
                 tp_points=None,
                 tags={"status": "missing_col", "missing": col}
             )
     
     # Extract arrays
-    mom_arr = ctx.cols.get("mom", np.array([]))
-    vol_ratio_arr = ctx.cols.get("vol_ratio", np.array([]))
-    atr_pips_arr = ctx.cols.get("atr_pips", np.array([]))
+    mom_arr = cols.get("mom", np.array([]))
+    vol_ratio_arr = cols.get("vol_ratio", np.array([]))
+    atr_pips_arr = cols.get("atr_pips", np.array([]))
     
     # Check if idx is valid
-    if ctx.idx < 0 or ctx.idx >= len(mom_arr):
+    if idx < 0 or idx >= len(mom_arr):
         tags_list.append("idx_out_of_bounds")
         return SignalIntent(
             strategy_id=STRATEGY_ID,
-            symbol=ctx.symbol,
+            symbol=symbol,
             side=Side.FLAT,
-            signal_time=ctx.current_time,
+            signal_time=current_time,
             sl_points=None,
             tp_points=None,
             tags={"status": "idx_error"}
         )
     
     # Check if momentum is valid (NaN before mom_window periods)
-    if np.isnan(mom_arr[ctx.idx]):
+    if np.isnan(mom_arr[idx]):
         tags_list.append("mom_nan")
         return SignalIntent(
             strategy_id=STRATEGY_ID,
-            symbol=ctx.symbol,
+            symbol=symbol,
             side=Side.FLAT,
-            signal_time=ctx.current_time,
+            signal_time=current_time,
             sl_points=None,
             tp_points=None,
             tags={"status": "mom_nan"}
         )
     
-    mom_val = float(mom_arr[ctx.idx])
-    vol_ratio_val = float(vol_ratio_arr[ctx.idx])
-    atr_pips_val = float(atr_pips_arr[ctx.idx])
+    mom_val = float(mom_arr[idx])
+    vol_ratio_val = float(vol_ratio_arr[idx])
+    atr_pips_val = float(atr_pips_arr[idx])
     
     # ============ REGIME GATES ============
     tags_list.append(f"mom={mom_val:.6f}")
     tags_list.append(f"vol_ratio={vol_ratio_val:.2f}")
     
     # Parse regime snapshot
-    regime_info = ctx.regime_snapshot or ""
+    regime_info = regime_snapshot or ""
     vol_regime = _extract_vol_regime(regime_info)
     spike_flag = _extract_spike_flag(regime_info)
     
@@ -122,9 +116,9 @@ def generate_signal(ctx: MomSignalContext) -> SignalIntent:
         tags_list.append("vol_regime_reject")
         return SignalIntent(
             strategy_id=STRATEGY_ID,
-            symbol=ctx.symbol,
+            symbol=symbol,
             side=Side.FLAT,
-            signal_time=ctx.current_time,
+            signal_time=current_time,
             sl_points=None,
             tp_points=None,
             tags={"status": "vol_regime_reject"}
@@ -135,9 +129,9 @@ def generate_signal(ctx: MomSignalContext) -> SignalIntent:
         tags_list.append("spike_reject")
         return SignalIntent(
             strategy_id=STRATEGY_ID,
-            symbol=ctx.symbol,
+            symbol=symbol,
             side=Side.FLAT,
-            signal_time=ctx.current_time,
+            signal_time=current_time,
             sl_points=None,
             tp_points=None,
             tags={"status": "spike_reject"}
@@ -148,9 +142,9 @@ def generate_signal(ctx: MomSignalContext) -> SignalIntent:
         tags_list.append("vol_ratio_reject")
         return SignalIntent(
             strategy_id=STRATEGY_ID,
-            symbol=ctx.symbol,
+            symbol=symbol,
             side=Side.FLAT,
-            signal_time=ctx.current_time,
+            signal_time=current_time,
             sl_points=None,
             tp_points=None,
             tags={"status": "vol_ratio_reject"}
@@ -161,9 +155,9 @@ def generate_signal(ctx: MomSignalContext) -> SignalIntent:
         tags_list.append("atr_pips_reject")
         return SignalIntent(
             strategy_id=STRATEGY_ID,
-            symbol=ctx.symbol,
+            symbol=symbol,
             side=Side.FLAT,
-            signal_time=ctx.current_time,
+            signal_time=current_time,
             sl_points=None,
             tp_points=None,
             tags={"status": "atr_pips_reject"}
@@ -184,9 +178,9 @@ def generate_signal(ctx: MomSignalContext) -> SignalIntent:
         tags_list.append("momentum_neutral")
         return SignalIntent(
             strategy_id=STRATEGY_ID,
-            symbol=ctx.symbol,
+            symbol=symbol,
             side=Side.FLAT,
-            signal_time=ctx.current_time,
+            signal_time=current_time,
             sl_points=None,
             tp_points=None,
             tags={"status": "momentum_neutral"}
@@ -208,9 +202,9 @@ def generate_signal(ctx: MomSignalContext) -> SignalIntent:
     
     return SignalIntent(
         strategy_id=STRATEGY_ID,
-        symbol=ctx.symbol,
+        symbol=symbol,
         side=side,
-        signal_time=ctx.current_time,
+        signal_time=current_time,
         sl_points=sl_points,
         tp_points=tp_points,
         tags={"status": "signal_generated", "details": ", ".join(tags_list)}
@@ -232,14 +226,6 @@ def required_features() -> list[str]:
 
 
 # ============ HELPER FUNCTIONS ============
-
-def _get_strategy_params(config: object, strategy_id: str) -> dict:
-    """Extract strategy params from config."""
-    try:
-        return config.strategies.params.get(strategy_id, {})
-    except (AttributeError, KeyError):
-        return {}
-
 
 def _extract_vol_regime(regime_snapshot: str) -> str:
     """Extract VOL regime from snapshot string like 'VOL=LOW|SPIKE=0'."""

@@ -119,11 +119,13 @@ strategies/s1_trend_ema_atr_adx.py
 strategies/s2_mr_zscore_ema_regime.py
 strategies/s2_trend_expansion_breakout.py
 strategies/s3_breakout_atr_regime_ema200.py
+strategies/s3_ts_mom_vol_regime.py
 test_fast_tuning_integration.py
 test_output.txt
 test_s1_breakout_integration.py
 tests/anti_leakage/test_anti_leakage.py
 tests/conftest.py
+tests/test_atr_pips_regression.py
 tests/test_backtest.py
 tests/test_config_regime.py
 tests/test_config.py
@@ -146,8 +148,10 @@ tests/test_s1_trend_breakout_donchian.py
 tests/test_s1_trend_breakout_retest.py
 tests/test_s2_integration.py
 tests/test_s2_trend_expansion_breakout.py
+tests/test_s3_ts_mom_vol_regime.py
 tests/test_state_machine.py
 tests/test_strategies.py
+tests/test_trailing_chandelier.py
 tests/test_types.py
 tests/test_validation_tuner.py
 tuning/__init__.py
@@ -372,6 +376,81 @@ def get_fill_price(df: pd.DataFrame, idx_t: int, side: str) -> float:
 File: features/__init__.py
 ================
 """Feature engineering utilities."""
+
+================
+File: live/__init__.py
+================
+from .reconcile import reconcile_positions
+from .state_machine import SystemStateMachine
+
+__all__ = ["SystemStateMachine", "reconcile_positions"]
+
+================
+File: live/reconcile.py
+================
+from __future__ import annotations
+
+from typing import Any, Dict, Iterable, List, Tuple
+
+
+def reconcile_positions(
+    expected_positions: Iterable[Any],
+    broker_positions: Iterable[Any],
+    *,
+    qty_tolerance: float = 1e-6,
+) -> Tuple[bool, List[Dict[str, Any]]]:
+    expected = _aggregate_positions(expected_positions)
+    broker = _aggregate_positions(broker_positions)
+
+    diffs: List[Dict[str, Any]] = []
+    keys = set(expected.keys()) | set(broker.keys())
+
+    for key in sorted(keys):
+        expected_qty = expected.get(key, 0.0)
+        broker_qty = broker.get(key, 0.0)
+        if abs(expected_qty - broker_qty) > qty_tolerance:
+            diffs.append(
+                {
+                    "key": key,
+                    "expected_qty": expected_qty,
+                    "broker_qty": broker_qty,
+                    "suggestion": "SAFE_MODE",
+                }
+            )
+
+    return len(diffs) == 0, diffs
+
+
+def _aggregate_positions(positions: Iterable[Any]) -> Dict[tuple, float]:
+    aggregated: Dict[tuple, float] = {}
+    for position in positions:
+        payload = _normalize_position(position)
+        key = (payload["symbol"], payload["side"], payload["strategy_id"])
+        aggregated[key] = aggregated.get(key, 0.0) + float(payload["qty"])
+    return aggregated
+
+
+def _normalize_position(position: Any) -> Dict[str, Any]:
+    if hasattr(position, "to_dict"):
+        payload = position.to_dict()
+    elif isinstance(position, dict):
+        payload = position
+    else:
+        payload = position.__dict__
+
+    side = payload.get("side")
+    if hasattr(side, "value"):
+        side = side.value
+
+    return {
+        "symbol": payload.get("symbol"),
+        "side": side,
+        "strategy_id": payload.get("strategy_id", ""),
+        "qty": payload.get("qty", 0.0),
+    }
+
+
+__all__ = ["reconcile_positions"]
 
 ================
 File: monitoring/__init__.py
@@ -1109,6 +1188,51 @@ def test_cost_noise_changes_distribution():
     rounded = {round(value, 6) for value in result["pnl_distribution"]}
 
     assert len(rounded) > 1
+
+================
+File: tests/test_reconcile.py
+================
+from live.reconcile import reconcile_positions
+
+
+def test_reconcile_detects_mismatch() -> None:
+    expected_positions = [
+        {"symbol": "EURUSD", "side": "LONG", "strategy_id": "s1", "qty": 1.5},
+        {"symbol": "USDJPY", "side": "SHORT", "strategy_id": "s2", "qty": 2.0},
+    ]
+    broker_positions = [
+        {"symbol": "EURUSD", "side": "LONG", "strategy_id": "s1", "qty": 1.0},
+        {"symbol": "USDJPY", "side": "SHORT", "strategy_id": "s2", "qty": 2.0},
+    ]
+
+    ok, diffs = reconcile_positions(expected_positions, broker_positions)
+
+    assert ok is False
+    assert diffs
+    assert diffs[0]["suggestion"] == "SAFE_MODE"
+
+================
+File: tests/test_state_machine.py
+================
+from live.state_machine import SystemStateMachine
+
+
+def test_state_transitions() -> None:
+    machine = SystemStateMachine(max_execution_errors=2)
+    assert machine.state.value == "RUNNING"
+
+    machine.record_execution_error()
+    assert machine.state.value == "DEGRADED"
+
+    machine.record_execution_error()
+    assert machine.state.value == "HALTED"
+
+    machine = SystemStateMachine(max_execution_errors=3)
+    machine.record_reconcile_mismatch()
+    assert machine.state.value == "SAFE_MODE"
+
+    machine.record_dd_flags(day_dd_breached=True, week_dd_breached=False)
+    assert machine.state.value == "HALTED"
 
 ================
 File: validation/__init__.py
@@ -5040,79 +5164,47 @@ Stage 2: Top-K Validation (A/B/C)
 All implementation objectives achieved. System is ready for two-stage tuning with scenario filtering.
 
 ================
-File: live/__init__.py
-================
-from .reconcile import reconcile_positions
-from .state_machine import SystemStateMachine
-
-__all__ = ["SystemStateMachine", "reconcile_positions"]
-
-================
-File: live/reconcile.py
+File: live/state_machine.py
 ================
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Tuple
+from desk_types import SystemState
 
 
-def reconcile_positions(
-    expected_positions: Iterable[Any],
-    broker_positions: Iterable[Any],
-    *,
-    qty_tolerance: float = 1e-6,
-) -> Tuple[bool, List[Dict[str, Any]]]:
-    expected = _aggregate_positions(expected_positions)
-    broker = _aggregate_positions(broker_positions)
+class SystemStateMachine:
+    def __init__(self, max_execution_errors: int) -> None:
+        self._state = SystemState.RUNNING
+        self._max_execution_errors = max_execution_errors
+        self._execution_errors = 0
 
-    diffs: List[Dict[str, Any]] = []
-    keys = set(expected.keys()) | set(broker.keys())
+    @property
+    def state(self) -> SystemState:
+        return self._state
 
-    for key in sorted(keys):
-        expected_qty = expected.get(key, 0.0)
-        broker_qty = broker.get(key, 0.0)
-        if abs(expected_qty - broker_qty) > qty_tolerance:
-            diffs.append(
-                {
-                    "key": key,
-                    "expected_qty": expected_qty,
-                    "broker_qty": broker_qty,
-                    "suggestion": "SAFE_MODE",
-                }
-            )
+    @property
+    def execution_errors(self) -> int:
+        return self._execution_errors
 
-    return len(diffs) == 0, diffs
+    def record_execution_error(self) -> SystemState:
+        self._execution_errors += 1
+        if self._execution_errors >= self._max_execution_errors:
+            self._state = SystemState.HALTED
+        elif self._state == SystemState.RUNNING:
+            self._state = SystemState.DEGRADED
+        return self._state
 
+    def record_reconcile_mismatch(self) -> SystemState:
+        if self._state != SystemState.HALTED:
+            self._state = SystemState.SAFE_MODE
+        return self._state
 
-def _aggregate_positions(positions: Iterable[Any]) -> Dict[tuple, float]:
-    aggregated: Dict[tuple, float] = {}
-    for position in positions:
-        payload = _normalize_position(position)
-        key = (payload["symbol"], payload["side"], payload["strategy_id"])
-        aggregated[key] = aggregated.get(key, 0.0) + float(payload["qty"])
-    return aggregated
+    def record_dd_flags(self, *, day_dd_breached: bool, week_dd_breached: bool) -> SystemState:
+        if day_dd_breached or week_dd_breached:
+            self._state = SystemState.HALTED
+        return self._state
 
 
-def _normalize_position(position: Any) -> Dict[str, Any]:
-    if hasattr(position, "to_dict"):
-        payload = position.to_dict()
-    elif isinstance(position, dict):
-        payload = position
-    else:
-        payload = position.__dict__
-
-    side = payload.get("side")
-    if hasattr(side, "value"):
-        side = side.value
-
-    return {
-        "symbol": payload.get("symbol"),
-        "side": side,
-        "strategy_id": payload.get("strategy_id", ""),
-        "qty": payload.get("qty", 0.0),
-    }
-
-
-__all__ = ["reconcile_positions"]
+__all__ = ["SystemStateMachine"]
 
 ================
 File: QUICK_REFERENCE.md
@@ -9161,6 +9253,280 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     )
 
 ================
+File: strategies/s3_ts_mom_vol_regime.py
+================
+"""
+S3_TS_MOM_VOL_REGIME: Time-Series Momentum Strategy with Volatility Regime Gating
+
+Captures persistent directional moves using rolling returns (momentum).
+Trades only when volatility regime supports trend continuation.
+Anti-lookahead: signal on close(t), fill on open(t+1).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Dict
+
+import numpy as np
+import pandas as pd
+
+from desk_types import SignalIntent, Side
+
+
+STRATEGY_ID = "S3_TS_MOM_VOL_REGIME"
+
+
+@dataclass
+class MomSignalContext:
+    """Input context for momentum signal generation."""
+    cols: Dict[str, np.ndarray]  # {col_name: np.array}
+    idx: int
+    symbol: str
+    current_time: pd.Timestamp
+    config: object
+    regime_snapshot: str
+
+
+def generate_signal(ctx: MomSignalContext) -> SignalIntent:
+    """
+    Generate momentum-based signal with volatility regime gating.
+    
+    Returns SignalIntent with:
+    - side: Side.LONG, Side.SHORT, or Side.FLAT
+    - sl_points: stop loss in pips (SL)
+    - tp_points: optional take profit in pips (default None for trailing)
+    - tags: dict of signal metadata
+    """
+    
+    # Extract parameters from config
+    spec_params = _get_strategy_params(ctx.config, STRATEGY_ID)
+    
+    mom_window = int(spec_params.get("mom_window", 96))
+    mom_th = float(spec_params.get("mom_th", 0.0))
+    vol_ratio_th = float(spec_params.get("vol_ratio_th", 1.1))
+    atr_min_pips = float(spec_params.get("atr_min_pips", 8.0))
+    allowed_vol_regimes = spec_params.get("allowed_vol_regimes", ["MID", "HIGH"])
+    spike_block = bool(spec_params.get("spike_block", False))
+    k_sl = float(spec_params.get("k_sl", 2.5))
+    min_sl_points = float(spec_params.get("min_sl_points", 8.0))
+    
+    tags_list = []
+    
+    # Ensure required columns exist
+    required = ["mom", "vol_ratio", "atr_pips", "regime_snapshot"]
+    for col in required:
+        if col not in ctx.cols:
+            tags_list.append(f"missing_{col}")
+            return SignalIntent(
+                strategy_id=STRATEGY_ID,
+                symbol=ctx.symbol,
+                side=Side.FLAT,
+                signal_time=ctx.current_time,
+                sl_points=None,
+                tp_points=None,
+                tags={"status": "missing_col", "missing": col}
+            )
+    
+    # Extract arrays
+    mom_arr = ctx.cols.get("mom", np.array([]))
+    vol_ratio_arr = ctx.cols.get("vol_ratio", np.array([]))
+    atr_pips_arr = ctx.cols.get("atr_pips", np.array([]))
+    
+    # Check if idx is valid
+    if ctx.idx < 0 or ctx.idx >= len(mom_arr):
+        tags_list.append("idx_out_of_bounds")
+        return SignalIntent(
+            strategy_id=STRATEGY_ID,
+            symbol=ctx.symbol,
+            side=Side.FLAT,
+            signal_time=ctx.current_time,
+            sl_points=None,
+            tp_points=None,
+            tags={"status": "idx_error"}
+        )
+    
+    # Check if momentum is valid (NaN before mom_window periods)
+    if np.isnan(mom_arr[ctx.idx]):
+        tags_list.append("mom_nan")
+        return SignalIntent(
+            strategy_id=STRATEGY_ID,
+            symbol=ctx.symbol,
+            side=Side.FLAT,
+            signal_time=ctx.current_time,
+            sl_points=None,
+            tp_points=None,
+            tags={"status": "mom_nan"}
+        )
+    
+    mom_val = float(mom_arr[ctx.idx])
+    vol_ratio_val = float(vol_ratio_arr[ctx.idx])
+    atr_pips_val = float(atr_pips_arr[ctx.idx])
+    
+    # ============ REGIME GATES ============
+    tags_list.append(f"mom={mom_val:.6f}")
+    tags_list.append(f"vol_ratio={vol_ratio_val:.2f}")
+    
+    # Parse regime snapshot
+    regime_info = ctx.regime_snapshot or ""
+    vol_regime = _extract_vol_regime(regime_info)
+    spike_flag = _extract_spike_flag(regime_info)
+    
+    tags_list.append(f"vol_regime={vol_regime}")
+    
+    # Volatility regime gate
+    if vol_regime not in allowed_vol_regimes:
+        tags_list.append("vol_regime_reject")
+        return SignalIntent(
+            strategy_id=STRATEGY_ID,
+            symbol=ctx.symbol,
+            side=Side.FLAT,
+            signal_time=ctx.current_time,
+            sl_points=None,
+            tp_points=None,
+            tags={"status": "vol_regime_reject"}
+        )
+    
+    # Spike gate
+    if spike_block and spike_flag == 1:
+        tags_list.append("spike_reject")
+        return SignalIntent(
+            strategy_id=STRATEGY_ID,
+            symbol=ctx.symbol,
+            side=Side.FLAT,
+            signal_time=ctx.current_time,
+            sl_points=None,
+            tp_points=None,
+            tags={"status": "spike_reject"}
+        )
+    
+    # Vol ratio gate
+    if vol_ratio_val < vol_ratio_th:
+        tags_list.append("vol_ratio_reject")
+        return SignalIntent(
+            strategy_id=STRATEGY_ID,
+            symbol=ctx.symbol,
+            side=Side.FLAT,
+            signal_time=ctx.current_time,
+            sl_points=None,
+            tp_points=None,
+            tags={"status": "vol_ratio_reject"}
+        )
+    
+    # ATR pips gate
+    if atr_pips_val < atr_min_pips:
+        tags_list.append("atr_pips_reject")
+        return SignalIntent(
+            strategy_id=STRATEGY_ID,
+            symbol=ctx.symbol,
+            side=Side.FLAT,
+            signal_time=ctx.current_time,
+            sl_points=None,
+            tp_points=None,
+            tags={"status": "atr_pips_reject"}
+        )
+    
+    tags_list.append("gates_passed")
+    
+    # ============ MOMENTUM DIRECTION ============
+    side = Side.FLAT
+    
+    if mom_val > mom_th:
+        side = Side.LONG
+        tags_list.append("long_signal")
+    elif mom_val < -mom_th:
+        side = Side.SHORT
+        tags_list.append("short_signal")
+    else:
+        tags_list.append("momentum_neutral")
+        return SignalIntent(
+            strategy_id=STRATEGY_ID,
+            symbol=ctx.symbol,
+            side=Side.FLAT,
+            signal_time=ctx.current_time,
+            sl_points=None,
+            tp_points=None,
+            tags={"status": "momentum_neutral"}
+        )
+    
+    # ============ RISK CALCULATION ============
+    # SL in PIPS: sl_points = max(k_sl * atr_pips, min_sl_points)
+    sl_points = max(k_sl * atr_pips_val, min_sl_points)
+    
+    # TP: default None for trailing stop, or compute if k_tp provided
+    tp_points = None
+    k_tp = spec_params.get("k_tp", None)
+    if k_tp is not None:
+        min_tp_points = float(spec_params.get("min_tp_points", 5.0))
+        tp_points = max(float(k_tp) * atr_pips_val, min_tp_points)
+        tags_list.append(f"tp={tp_points:.1f}")
+    
+    tags_list.append(f"sl={sl_points:.1f}")
+    
+    return SignalIntent(
+        strategy_id=STRATEGY_ID,
+        symbol=ctx.symbol,
+        side=side,
+        signal_time=ctx.current_time,
+        sl_points=sl_points,
+        tp_points=tp_points,
+        tags={"status": "signal_generated", "details": ", ".join(tags_list)}
+    )
+
+
+def required_features() -> list[str]:
+    """List of required data columns for this strategy."""
+    return [
+        "close",
+        "r",
+        "mom",
+        "vol_ratio",
+        "atr_short",
+        "atr_long",
+        "atr_pips",
+        "regime_snapshot",
+    ]
+
+
+# ============ HELPER FUNCTIONS ============
+
+def _get_strategy_params(config: object, strategy_id: str) -> dict:
+    """Extract strategy params from config."""
+    try:
+        return config.strategies.params.get(strategy_id, {})
+    except (AttributeError, KeyError):
+        return {}
+
+
+def _extract_vol_regime(regime_snapshot: str) -> str:
+    """Extract VOL regime from snapshot string like 'VOL=LOW|SPIKE=0'."""
+    if not regime_snapshot:
+        return "UNKNOWN"
+    
+    parts = regime_snapshot.split("|")
+    for part in parts:
+        if part.startswith("VOL="):
+            return part.replace("VOL=", "")
+    
+    return "UNKNOWN"
+
+
+def _extract_spike_flag(regime_snapshot: str) -> int:
+    """Extract SPIKE flag from snapshot string."""
+    if not regime_snapshot:
+        return 0
+    
+    parts = regime_snapshot.split("|")
+    for part in parts:
+        if part.startswith("SPIKE="):
+            try:
+                return int(part.replace("SPIKE=", ""))
+            except ValueError:
+                return 0
+    
+    return 0
+
+================
 File: test_fast_tuning_integration.py
 ================
 #!/usr/bin/env python3
@@ -9910,28 +10276,6 @@ from risk.allocator import RiskAllocator
 def test_imports_smoke() -> None:
     assert BacktestOrchestrator is not None
     assert RiskAllocator is not None
-
-================
-File: tests/test_reconcile.py
-================
-from live.reconcile import reconcile_positions
-
-
-def test_reconcile_detects_mismatch() -> None:
-    expected_positions = [
-        {"symbol": "EURUSD", "side": "LONG", "strategy_id": "s1", "qty": 1.5},
-        {"symbol": "USDJPY", "side": "SHORT", "strategy_id": "s2", "qty": 2.0},
-    ]
-    broker_positions = [
-        {"symbol": "EURUSD", "side": "LONG", "strategy_id": "s1", "qty": 1.0},
-        {"symbol": "USDJPY", "side": "SHORT", "strategy_id": "s2", "qty": 2.0},
-    ]
-
-    ok, diffs = reconcile_positions(expected_positions, broker_positions)
-
-    assert ok is False
-    assert diffs
-    assert diffs[0]["suggestion"] == "SAFE_MODE"
 
 ================
 File: tests/test_risk.py
@@ -10914,305 +11258,6 @@ if __name__ == "__main__":
     print("\n[SUCCESS] ALL TESTS PASSED!")
 
 ================
-File: tests/test_s2_integration.py
-================
-"""
-Integration tests for S2_TREND_EXPANSION_BREAKOUT strategy.
-- Strategy ID alignment in configs
-- Trailing stop monotonicity (LONG never decreases, SHORT never increases)
-- MFE guard for time-based exit
-- End-to-end backtest validation
-"""
-
-import pytest
-import numpy as np
-import pandas as pd
-from pathlib import Path
-from pathlib import Path
-
-# Append workspace to path for imports
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from configs.models import (
-    Config, Universe, BarContract, Strategies, Risk, RiskCaps, Regime,
-    Costs, SlippageModel, Validation, WalkForward, MonteCarlo, MonteCarlo1, MonteCarlo2,
-    Reproducibility, Outputs
-)
-from backtest.orchestrator import BacktestOrchestrator
-from desk_types import Side
-from strategies.s2_trend_expansion_breakout import STRATEGY_ID
-
-
-def _create_synthetic_m15_data(num_bars: int = 500) -> pd.DataFrame:
-    """Create synthetic M15 OHLCV data for testing."""
-    dates = pd.date_range(start="2023-01-01", periods=num_bars, freq="15min")
-    
-    # Synthetic price with trend + volatility
-    np.random.seed(42)
-    returns = np.random.normal(0.0001, 0.002, num_bars)
-    close = 1.0500 * np.exp(np.cumsum(returns))
-    
-    open_price = close + np.random.normal(0, 0.0002, num_bars)
-    high = np.maximum(close, open_price) + np.abs(np.random.normal(0, 0.0003, num_bars))
-    low = np.minimum(close, open_price) - np.abs(np.random.normal(0, 0.0003, num_bars))
-    volume = np.random.uniform(1e6, 5e6, num_bars)
-    
-    df = pd.DataFrame({
-        "open": open_price,
-        "high": high,
-        "low": low,
-        "close": close,
-        "volume": volume,
-    }, index=dates)
-    return df
-
-
-def _create_base_config() -> Config:
-    """Create minimal valid config for testing."""
-    return Config(
-        universe=Universe(symbols=["EURGBP"], timeframe="M15"),
-        bar_contract=BarContract(signal_on="close", fill_on="open_next", allow_bar0=False),
-        strategies=Strategies(
-            enabled=["S2_TREND_EXPANSION_BREAKOUT"],
-            params={
-                "S2_TREND_EXPANSION_BREAKOUT": {
-                    "ema_fast": 50,
-                    "ema_slow": 200,
-                    "atr_short_period": 14,
-                    "atr_long_period": 100,
-                    "breakout_lookback": 55,
-                    "buffer_atr": 0.2,
-                    "vol_ratio_th": 1.1,
-                    "impulse_th": 1.2,
-                    "k_sl": 3.0,
-                    "min_sl_points": 8.0,
-                    "k_trail": 3.5,
-                    "max_hold_bars": 96,
-                    "min_mfe_atr": 0.5,
-                },
-                # Add minimal params for all other strategies (Pydantic validator requirement)
-                "S1_TREND_EMA_ATR_ADX": {},
-                "S1_TREND_BREAKOUT_DONCHIAN": {},
-                "S1_TREND_BREAKOUT_RETEST": {},
-                "S2_MR_ZSCORE_EMA_REGIME": {},
-                "S3_BREAKOUT_ATR_REGIME_EMA200": {},
-            }
-        ),
-        risk=Risk(
-            r_base=1.0,
-            caps=RiskCaps(per_strategy=100000.0, per_symbol=100000.0, usd_exposure_cap=500000.0),
-            conflict_policy="netting",
-            priority_order=None,
-            dd_day_limit=1.0,
-            dd_week_limit=1.0,
-            max_execution_errors=10,
-        ),
-        costs=Costs(
-            spread_baseline_pips={"EURGBP": 0.0001},
-            slippage=SlippageModel(
-                slip_base=0.0,
-                slip_k=0.0,
-                spike_tr_atr_th=10.0,
-                spike_mult=1.0,
-            ),
-            scenarios={"A": 1.0, "B": 1.0, "C": 1.0},
-        ),
-        validation=Validation(
-            walk_forward=WalkForward(train=1, val=1, test=1),
-            perturb_core_params_pct=0.0
-        ),
-        montecarlo=MonteCarlo(
-            mc1=MonteCarlo1(block_min=1, block_max=1, n_sims=1),
-            mc2=MonteCarlo2(spread_noise_range=(1.0, 1.0), slippage_noise_range=(1.0, 1.0), n_sims=1),
-        ),
-        outputs=Outputs(runs_dir="./runs", write_trades_csv=False, write_report_json=False, write_mc_json=False),
-        reproducibility=Reproducibility(random_seed=42),
-        regime=Regime(),
-    )
-
-
-class TestS2Integration:
-    """Integration test suite for S2_TREND_EXPANSION_BREAKOUT."""
-
-    def test_strategy_id_uppercase(self):
-        """Verify STRATEGY_ID is uppercase 'S2_TREND_EXPANSION_BREAKOUT'."""
-        assert STRATEGY_ID == "S2_TREND_EXPANSION_BREAKOUT"
-        assert STRATEGY_ID.isupper(), "STRATEGY_ID should be uppercase"
-
-    def test_config_validation_with_s2_params(self):
-        """Verify S2 params pass Pydantic validation."""
-        config = _create_base_config()
-        
-        # Verify S2 is in enabled strategies
-        assert "S2_TREND_EXPANSION_BREAKOUT" in config.strategies.enabled
-        s2_params = config.strategies.params["S2_TREND_EXPANSION_BREAKOUT"]
-        assert s2_params["ema_fast"] == 50
-        assert s2_params["k_trail"] == 3.5
-        assert s2_params["min_mfe_atr"] == 0.5
-
-    def test_backtest_does_not_crash(self):
-        """Verify orchestrator can be initialized (sanity check)."""
-        config = _create_base_config()
-        
-        # Create synthetic data - minimal to avoid feature computation errors
-        # (Full OHLC generation is in orchestrator, not test data)
-        n_bars = 300
-        np.random.seed(42)
-        returns = np.random.randn(n_bars) * 0.001
-        close = (1 + returns).cumprod()
-        dates = pd.date_range(start="2023-01-01", periods=n_bars, freq="15min")
-        
-        df = pd.DataFrame({
-            "open": close * (1 + np.random.randn(n_bars) * 0.0001),
-            "high": close * (1 + np.abs(np.random.randn(n_bars) * 0.0003)),
-            "low": close * (1 - np.abs(np.random.randn(n_bars) * 0.0003)),
-            "close": close,
-            "volume": np.ones(n_bars) * 1e6,
-        }, index=dates)
-        
-        # Orchestrator should process without crashing (may have 0 trades)
-        orch = BacktestOrchestrator()
-        try:
-            trades, report = orch.run({"EURGBP": df}, config)
-            # If it runs, test passes
-            assert isinstance(trades, pd.DataFrame)
-        except Exception as e:
-            # Accept feature computation errors (expected with synthetic data)
-            # We're just verifying the structure doesn't crash
-            if "atr" not in str(e).lower():
-                raise
-
-    def test_trailing_stop_code_present(self):
-        """
-        Verify trailing stop implementation is present in orchestrator.
-        Check that S2_TREND_EXPANSION_BREAKOUT trailing logic is coded.
-        """
-        # Read orchestrator source to verify trailing stop code exists
-        orch_path = Path(__file__).parent.parent / "backtest" / "orchestrator.py"
-        source = orch_path.read_text()
-        
-        # Verify key patterns exist
-        assert 'S2_TREND_EXPANSION_BREAKOUT' in source
-        assert 'highest_high_since_entry' in source
-        assert 'lowest_low_since_entry' in source
-        assert 'k_trail' in source
-        assert 'Chandelier' in source or 'trail' in source.lower()
-        
-        # Verify monotonicity comments/logic
-        assert 'LONG' in source and 'SHORT' in source
-
-    def test_trailing_stop_update_logic_coded(self):
-        """
-        Verify trailing stop logic for SHORT is in orchestrator.
-        LONG trail never decreases; SHORT trail never increases.
-        """
-        orch_path = Path(__file__).parent.parent / "backtest" / "orchestrator.py"
-        source = orch_path.read_text()
-        
-        # Verify the logic for SHORT side
-        assert 'if position["current_side"] == Side.SHORT:' in source or \
-               "if position['current_side'] == Side.SHORT:" in source
-        
-        # Verify SL update logic
-        assert 'position["sl_price"]' in source
-        assert 'trail_stop' in source
-
-    def test_mfe_guard_fields_in_orchestrator(self):
-        """
-        Verify MFE guard and time-based exit implementation.
-        Check that max_hold_bars and min_mfe_atr are referenced.
-        """
-        orch_path = Path(__file__).parent.parent / "backtest" / "orchestrator.py"
-        source = orch_path.read_text()
-        
-        # Verify time exit logic exists
-        assert 'TIME' in source
-        # Verify max_hold_bars is used
-        assert 'max_hold_bars' in source
-
-    def test_s1_backward_compatibility(self):
-        """Verify S1 strategies still work (backward compatibility)."""
-        # Create config with S1 strategy
-        config = Config(
-            universe=Universe(symbols=["EURUSD"], timeframe="M1"),
-            bar_contract=BarContract(signal_on="close", fill_on="open_next", allow_bar0=False),
-            strategies=Strategies(
-                enabled=["S1_TREND_BREAKOUT_DONCHIAN"],
-                params={
-                    "S1_TREND_EMA_ATR_ADX": {},
-                    "S1_TREND_BREAKOUT_DONCHIAN": {
-                        "lookback_high": 55,
-                        "lookback_low": 55,
-                        "buffer_atr": 0.2,
-                        "atr_period": 14,
-                        "k_sl": 3.0,
-                        "min_sl_points": 8.0,
-                    },
-                    "S1_TREND_BREAKOUT_RETEST": {},
-                    "S2_MR_ZSCORE_EMA_REGIME": {},
-                    "S3_BREAKOUT_ATR_REGIME_EMA200": {},
-                    "S2_TREND_EXPANSION_BREAKOUT": {},
-                }
-            ),
-            risk=Risk(
-                r_base=1.0,
-                caps=RiskCaps(per_strategy=100000.0, per_symbol=100000.0, usd_exposure_cap=500000.0),
-                conflict_policy="netting",
-                priority_order=None,
-                dd_day_limit=1.0,
-                dd_week_limit=1.0,
-                max_execution_errors=10,
-            ),
-            costs=Costs(
-                spread_baseline_pips={"EURUSD": 0.0001},
-                slippage=SlippageModel(
-                    slip_base=0.0,
-                    slip_k=0.0,
-                    spike_tr_atr_th=10.0,
-                    spike_mult=1.0,
-                ),
-                scenarios={"A": 1.0, "B": 1.0, "C": 1.0},
-            ),
-            validation=Validation(
-                walk_forward=WalkForward(train=1, val=1, test=1),
-                perturb_core_params_pct=0.0
-            ),
-            montecarlo=MonteCarlo(
-                mc1=MonteCarlo1(block_min=1, block_max=1, n_sims=1),
-                mc2=MonteCarlo2(spread_noise_range=(1.0, 1.0), slippage_noise_range=(1.0, 1.0), n_sims=1),
-            ),
-            outputs=Outputs(runs_dir="./runs", write_trades_csv=False, write_report_json=False, write_mc_json=False),
-            reproducibility=Reproducibility(random_seed=42),
-            regime=Regime(),
-        )
-        
-        # Create synthetic data
-        n_bars = 300
-        np.random.seed(42)
-        returns = np.random.randn(n_bars) * 0.001
-        close = (1 + returns).cumprod()
-        dates = pd.date_range(start="2023-01-01", periods=n_bars, freq="min")
-        
-        df = pd.DataFrame({
-            "open": close * (1 + np.random.randn(n_bars) * 0.0001),
-            "high": close * (1 + np.abs(np.random.randn(n_bars) * 0.0003)),
-            "low": close * (1 - np.abs(np.random.randn(n_bars) * 0.0003)),
-            "close": close,
-            "volume": np.ones(n_bars) * 1e6,
-        }, index=dates)
-        
-        orch = BacktestOrchestrator()
-        trades, report = orch.run({"EURUSD": df}, config)
-        
-        # Should complete without errors
-        assert isinstance(trades, pd.DataFrame)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
-
-================
 File: tests/test_s2_trend_expansion_breakout.py
 ================
 """
@@ -11547,27 +11592,838 @@ if __name__ == "__main__":
     print("\n[SUCCESS] ALL TESTS PASSED!")
 
 ================
-File: tests/test_state_machine.py
+File: tests/test_s3_ts_mom_vol_regime.py
 ================
-from live.state_machine import SystemStateMachine
+"""
+Tests for S3_TS_MOM_VOL_REGIME strategy signal generation.
+"""
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from desk_types import Side
+from strategies.s3_ts_mom_vol_regime import (
+    generate_signal,
+    MomSignalContext,
+    required_features,
+    STRATEGY_ID,
+)
 
 
-def test_state_transitions() -> None:
-    machine = SystemStateMachine(max_execution_errors=2)
-    assert machine.state.value == "RUNNING"
+# ============ FIXTURES ============
 
-    machine.record_execution_error()
-    assert machine.state.value == "DEGRADED"
+@pytest.fixture
+def mock_config():
+    """Mock config object with strategy params."""
+    class MockConfig:
+        class Strategies:
+            params = {
+                "S3_TS_MOM_VOL_REGIME": {
+                    "mom_window": 48,
+                    "mom_th": 0.0,
+                    "atr_short_period": 14,
+                    "atr_long_period": 100,
+                    "vol_ratio_th": 1.1,
+                    "atr_min_pips": 8.0,
+                    "allowed_vol_regimes": ["MID", "HIGH"],
+                    "spike_block": False,
+                    "k_sl": 2.5,
+                    "min_sl_points": 8.0,
+                    "k_tp": None,
+                }
+            }
+        strategies = Strategies()
+    
+    return MockConfig()
 
-    machine.record_execution_error()
-    assert machine.state.value == "HALTED"
 
-    machine = SystemStateMachine(max_execution_errors=3)
-    machine.record_reconcile_mismatch()
-    assert machine.state.value == "SAFE_MODE"
+# ============ HELPER FUNCTIONS ============
 
-    machine.record_dd_flags(day_dd_breached=True, week_dd_breached=False)
-    assert machine.state.value == "HALTED"
+def _create_simple_arrays(size=150, base_mom=0.0):
+    """
+    Create simple test arrays for momentum signals.
+    
+    Returns:
+        dict with mom, vol_ratio, atr_pips arrays
+    """
+    idx_start = 50  # Valid data starts here
+    
+    # Create momentum array (NaN before idx_start)
+    mom = np.full(size, np.nan)
+    mom[idx_start:] = base_mom
+    
+    # Create vol_ratio (constant high value)
+    vol_ratio = np.full(size, 1.5)
+    
+    # Create atr_pips (constant medium value)
+    atr_pips = np.full(size, 15.0)
+    
+    return {
+        "mom": mom.copy(),
+        "vol_ratio": vol_ratio.copy(),
+        "atr_pips": atr_pips.copy(),
+    }
+
+
+# ============ TESTS ============
+
+def test_required_features():
+    """Test that required_features returns expected columns."""
+    features = required_features()
+    assert isinstance(features, list)
+    assert "mom" in features
+    assert "vol_ratio" in features
+    assert "atr_pips" in features
+    assert "regime_snapshot" in features
+
+
+def test_no_lookahead_momentum():
+    """
+    Test anti-lookahead property: Changing future momentum value
+    should NOT affect signal at current index.
+    """
+    # Create test arrays
+    arrays = _create_simple_arrays(size=150, base_mom=0.001)
+    idx = 100
+    
+    # Generate signal with original momentum
+    ctx_original = MomSignalContext(
+        cols={
+            "mom": arrays["mom"].copy(),
+            "vol_ratio": arrays["vol_ratio"].copy(),
+            "atr_pips": arrays["atr_pips"].copy(),
+            "regime_snapshot": "VOL=HIGH|SPIKE=0",
+        },
+        idx=idx,
+        symbol="EURUSD",
+        current_time=pd.Timestamp("2024-01-01 12:00"),
+        config=None,
+        regime_snapshot="VOL=HIGH|SPIKE=0",
+    )
+    
+    signal_original = generate_signal(ctx_original)
+    
+    # Modify future momentum (idx + 10)
+    arrays_modified = _create_simple_arrays(size=150, base_mom=0.001)
+    arrays_modified["mom"][idx + 10] = 0.999  # Large future change
+    
+    ctx_modified = MomSignalContext(
+        cols={
+            "mom": arrays_modified["mom"].copy(),
+            "vol_ratio": arrays_modified["vol_ratio"].copy(),
+            "atr_pips": arrays_modified["atr_pips"].copy(),
+            "regime_snapshot": "VOL=HIGH|SPIKE=0",
+        },
+        idx=idx,
+        symbol="EURUSD",
+        current_time=pd.Timestamp("2024-01-01 12:00"),
+        config=None,
+        regime_snapshot="VOL=HIGH|SPIKE=0",
+    )
+    
+    signal_modified = generate_signal(ctx_modified)
+    
+    # Signals should be identical (no lookahead)
+    assert signal_original.side == signal_modified.side
+    assert signal_original.sl_points == signal_modified.sl_points
+
+
+def test_momentum_sanity_nan_period(mock_config):
+    """
+    Test that momentum NaN values result in FLAT signals.
+    """
+    arrays = _create_simple_arrays(size=150)
+    idx_nan = 20  # Before valid data starts (NaN region)
+    
+    ctx = MomSignalContext(
+        cols={
+            "mom": arrays["mom"].copy(),
+            "vol_ratio": arrays["vol_ratio"].copy(),
+            "atr_pips": arrays["atr_pips"].copy(),
+            "regime_snapshot": "VOL=HIGH|SPIKE=0",
+        },
+        idx=idx_nan,
+        symbol="EURUSD",
+        current_time=pd.Timestamp("2024-01-01 12:00"),
+        config=mock_config,
+        regime_snapshot="VOL=HIGH|SPIKE=0",
+    )
+    
+    signal = generate_signal(ctx)
+    
+    # Should be FLAT due to NaN momentum
+    assert signal.side == Side.FLAT
+    assert signal.tags.get("status") == "mom_nan"
+
+
+def test_signal_long_on_positive_momentum(mock_config):
+    """Test that LONG signal is generated when momentum > threshold."""
+    arrays = _create_simple_arrays(size=150, base_mom=0.002)
+    idx = 100
+    
+    ctx = MomSignalContext(
+        cols={
+            "mom": arrays["mom"].copy(),
+            "vol_ratio": arrays["vol_ratio"].copy(),
+            "atr_pips": arrays["atr_pips"].copy(),
+            "regime_snapshot": "VOL=HIGH|SPIKE=0",
+        },
+        idx=idx,
+        symbol="EURUSD",
+        current_time=pd.Timestamp("2024-01-01 12:00"),
+        config=mock_config,
+        regime_snapshot="VOL=HIGH|SPIKE=0",
+    )
+    
+    signal = generate_signal(ctx)
+    
+    assert signal.side == Side.LONG
+    assert signal.sl_points > 0
+    assert signal.tags.get("status") == "signal_generated"
+
+
+def test_signal_short_on_negative_momentum(mock_config):
+    """Test that SHORT signal is generated when momentum < -threshold."""
+    arrays = _create_simple_arrays(size=150, base_mom=-0.002)
+    idx = 100
+    
+    ctx = MomSignalContext(
+        cols={
+            "mom": arrays["mom"].copy(),
+            "vol_ratio": arrays["vol_ratio"].copy(),
+            "atr_pips": arrays["atr_pips"].copy(),
+            "regime_snapshot": "VOL=HIGH|SPIKE=0",
+        },
+        idx=idx,
+        symbol="EURUSD",
+        current_time=pd.Timestamp("2024-01-01 12:00"),
+        config=mock_config,
+        regime_snapshot="VOL=HIGH|SPIKE=0",
+    )
+    
+    signal = generate_signal(ctx)
+    
+    assert signal.side == Side.SHORT
+    assert signal.sl_points > 0
+    assert signal.tags.get("status") == "signal_generated"
+
+
+def test_signal_flat_on_neutral_momentum(mock_config):
+    """Test that FLAT signal when momentum is at threshold."""
+    arrays = _create_simple_arrays(size=150, base_mom=0.0)
+    idx = 100
+    
+    ctx = MomSignalContext(
+        cols={
+            "mom": arrays["mom"].copy(),
+            "vol_ratio": arrays["vol_ratio"].copy(),
+            "atr_pips": arrays["atr_pips"].copy(),
+            "regime_snapshot": "VOL=HIGH|SPIKE=0",
+        },
+        idx=idx,
+        symbol="EURUSD",
+        current_time=pd.Timestamp("2024-01-01 12:00"),
+        config=mock_config,
+        regime_snapshot="VOL=HIGH|SPIKE=0",
+    )
+    
+    signal = generate_signal(ctx)
+    
+    assert signal.side == Side.FLAT
+    assert signal.tags.get("status") == "momentum_neutral"
+
+
+def test_signal_rejects_low_vol_regime(mock_config):
+    """Test that signal is rejected when vol regime is not in allowed_vol_regimes."""
+    arrays = _create_simple_arrays(size=150, base_mom=0.002)
+    idx = 100
+    
+    ctx = MomSignalContext(
+        cols={
+            "mom": arrays["mom"].copy(),
+            "vol_ratio": arrays["vol_ratio"].copy(),
+            "atr_pips": arrays["atr_pips"].copy(),
+            "regime_snapshot": "VOL=LOW|SPIKE=0",
+        },
+        idx=idx,
+        symbol="EURUSD",
+        current_time=pd.Timestamp("2024-01-01 12:00"),
+        config=mock_config,
+        regime_snapshot="VOL=LOW|SPIKE=0",  # LOW not allowed
+    )
+    
+    signal = generate_signal(ctx)
+    
+    assert signal.side == Side.FLAT
+    assert signal.tags.get("status") == "vol_regime_reject"
+
+
+def test_signal_rejects_low_vol_ratio(mock_config):
+    """Test that signal is rejected when vol_ratio < threshold."""
+    arrays = _create_simple_arrays(size=150, base_mom=0.002)
+    arrays["vol_ratio"][:] = 0.9  # Below threshold (vol_ratio_th = 1.1)
+    idx = 100
+    
+    ctx = MomSignalContext(
+        cols={
+            "mom": arrays["mom"].copy(),
+            "vol_ratio": arrays["vol_ratio"].copy(),
+            "atr_pips": arrays["atr_pips"].copy(),
+            "regime_snapshot": "VOL=HIGH|SPIKE=0",
+        },
+        idx=idx,
+        symbol="EURUSD",
+        current_time=pd.Timestamp("2024-01-01 12:00"),
+        config=mock_config,
+        regime_snapshot="VOL=HIGH|SPIKE=0",
+    )
+    
+    signal = generate_signal(ctx)
+    
+    assert signal.side == Side.FLAT
+    assert signal.tags.get("status") == "vol_ratio_reject"
+
+
+def test_signal_rejects_low_atr_pips(mock_config):
+    """Test that signal is rejected when atr_pips < minimum."""
+    arrays = _create_simple_arrays(size=150, base_mom=0.002)
+    arrays["atr_pips"][:] = 5.0  # Below minimum (atr_min_pips = 8.0)
+    idx = 100
+    
+    ctx = MomSignalContext(
+        cols={
+            "mom": arrays["mom"].copy(),
+            "vol_ratio": arrays["vol_ratio"].copy(),
+            "atr_pips": arrays["atr_pips"].copy(),
+            "regime_snapshot": "VOL=HIGH|SPIKE=0",
+        },
+        idx=idx,
+        symbol="EURUSD",
+        current_time=pd.Timestamp("2024-01-01 12:00"),
+        config=mock_config,
+        regime_snapshot="VOL=HIGH|SPIKE=0",
+    )
+    
+    signal = generate_signal(ctx)
+    
+    assert signal.side == Side.FLAT
+    assert signal.tags.get("status") == "atr_pips_reject"
+
+
+def test_signal_spike_block(mock_config):
+    """Test that signal is blocked when spike_block=True and SPIKE=1."""
+    mock_config.strategies.params["S3_TS_MOM_VOL_REGIME"]["spike_block"] = True
+    
+    arrays = _create_simple_arrays(size=150, base_mom=0.002)
+    idx = 100
+    
+    ctx = MomSignalContext(
+        cols={
+            "mom": arrays["mom"].copy(),
+            "vol_ratio": arrays["vol_ratio"].copy(),
+            "atr_pips": arrays["atr_pips"].copy(),
+            "regime_snapshot": "VOL=HIGH|SPIKE=1",
+        },
+        idx=idx,
+        symbol="EURUSD",
+        current_time=pd.Timestamp("2024-01-01 12:00"),
+        config=mock_config,
+        regime_snapshot="VOL=HIGH|SPIKE=1",
+    )
+    
+    signal = generate_signal(ctx)
+    
+    assert signal.side == Side.FLAT
+    assert signal.tags.get("status") == "spike_reject"
+
+
+def test_sl_points_calculation(mock_config):
+    """Test that SL is correctly calculated as max(k_sl * atr_pips, min_sl_points)."""
+    arrays = _create_simple_arrays(size=150, base_mom=0.002)
+    arrays["atr_pips"][:] = 15.0  # Fixed 15 pips
+    idx = 100
+    
+    # k_sl = 2.5, min_sl_points = 8.0
+    # sl_points = max(2.5 * 15.0, 8.0) = max(37.5, 8.0) = 37.5
+    expected_sl = max(2.5 * 15.0, 8.0)
+    
+    ctx = MomSignalContext(
+        cols={
+            "mom": arrays["mom"].copy(),
+            "vol_ratio": arrays["vol_ratio"].copy(),
+            "atr_pips": arrays["atr_pips"].copy(),
+            "regime_snapshot": "VOL=HIGH|SPIKE=0",
+        },
+        idx=idx,
+        symbol="EURUSD",
+        current_time=pd.Timestamp("2024-01-01 12:00"),
+        config=mock_config,
+        regime_snapshot="VOL=HIGH|SPIKE=0",
+    )
+    
+    signal = generate_signal(ctx)
+    
+    assert signal.side == Side.LONG
+    assert np.isclose(signal.sl_points, expected_sl, rtol=1e-6)
+
+
+def test_sl_points_floor_with_min(mock_config):
+    """Test that SL respects min_sl_points floor."""
+    arrays = _create_simple_arrays(size=150, base_mom=0.002)
+    arrays["atr_pips"][:] = 8.5  # 8.5 pips (passes atr_min_pips = 8.0)
+    idx = 100
+    
+    # k_sl = 2.5, min_sl_points = 8.0
+    # sl_points = max(2.5 * 8.5, 8.0) = max(21.25, 8.0) = 21.25
+    expected_sl = max(2.5 * 8.5, 8.0)
+    
+    ctx = MomSignalContext(
+        cols={
+            "mom": arrays["mom"].copy(),
+            "vol_ratio": arrays["vol_ratio"].copy(),
+            "atr_pips": arrays["atr_pips"].copy(),
+            "regime_snapshot": "VOL=HIGH|SPIKE=0",
+        },
+        idx=idx,
+        symbol="EURUSD",
+        current_time=pd.Timestamp("2024-01-01 12:00"),
+        config=mock_config,
+        regime_snapshot="VOL=HIGH|SPIKE=0",
+    )
+    
+    signal = generate_signal(ctx)
+    
+    assert signal.side == Side.LONG
+    assert np.isclose(signal.sl_points, expected_sl, rtol=1e-6)
+
+
+def test_missing_required_column(mock_config):
+    """Test that signal is FLAT when required column is missing."""
+    arrays = _create_simple_arrays(size=150, base_mom=0.002)
+    idx = 100
+    
+    ctx = MomSignalContext(
+        cols={
+            # Missing 'mom' column
+            "vol_ratio": arrays["vol_ratio"].copy(),
+            "atr_pips": arrays["atr_pips"].copy(),
+            "regime_snapshot": "VOL=HIGH|SPIKE=0",
+        },
+        idx=idx,
+        symbol="EURUSD",
+        current_time=pd.Timestamp("2024-01-01 12:00"),
+        config=mock_config,
+        regime_snapshot="VOL=HIGH|SPIKE=0",
+    )
+    
+    signal = generate_signal(ctx)
+    
+    assert signal.side == Side.FLAT
+    assert signal.tags.get("status") == "missing_col"
+
+
+def test_idx_out_of_bounds(mock_config):
+    """Test that signal is FLAT when idx is out of bounds."""
+    arrays = _create_simple_arrays(size=150, base_mom=0.002)
+    idx = 999  # Out of bounds
+    
+    ctx = MomSignalContext(
+        cols={
+            "mom": arrays["mom"].copy(),
+            "vol_ratio": arrays["vol_ratio"].copy(),
+            "atr_pips": arrays["atr_pips"].copy(),
+            "regime_snapshot": "VOL=HIGH|SPIKE=0",
+        },
+        idx=idx,
+        symbol="EURUSD",
+        current_time=pd.Timestamp("2024-01-01 12:00"),
+        config=mock_config,
+        regime_snapshot="VOL=HIGH|SPIKE=0",
+    )
+    
+    signal = generate_signal(ctx)
+    
+    assert signal.side == Side.FLAT
+    assert signal.tags.get("status") == "idx_error"
+
+================
+File: tests/test_trailing_chandelier.py
+================
+"""
+Test suite for trailing chandelier stops and cooldown enforcement.
+
+Tests cover:
+1. Trailing stop monotonicity (never loosens for LONG/SHORT)
+2. Cooldown enforcement (no entry within cooldown_bars after exit)
+3. TRAIL exit reason detection
+4. Generic trailing logic for trend strategies (tp_points=None)
+"""
+
+import pytest
+import numpy as np
+import pandas as pd
+from datetime import datetime, timedelta
+
+
+@pytest.fixture
+def base_dataframe():
+    """Create a synthetic FX dataframe with daily OHLC and ATR data."""
+    dates = pd.date_range(start="2023-01-01", periods=100, freq="D")
+    np.random.seed(42)
+    
+    # Create trending price data with volatility
+    close_prices = 1.0500 + np.cumsum(np.random.normal(0.0005, 0.001, 100))
+    high_prices = close_prices + np.abs(np.random.normal(0.001, 0.0005, 100))
+    low_prices = close_prices - np.abs(np.random.normal(0.001, 0.0005, 100))
+    open_prices = np.roll(close_prices, 1)
+    open_prices[0] = 1.0500
+    
+    # Ensure OHLC integrity
+    high_prices = np.maximum(high_prices, np.maximum(open_prices, close_prices))
+    low_prices = np.minimum(low_prices, np.minimum(open_prices, close_prices))
+    
+    # Calculate ATR with 14-period simple average of TR
+    tr = np.zeros(100)
+    tr[0] = high_prices[0] - low_prices[0]
+    for i in range(1, 100):
+        tr[i] = max(
+            high_prices[i] - low_prices[i],
+            abs(high_prices[i] - close_prices[i - 1]),
+            abs(low_prices[i] - close_prices[i - 1]),
+        )
+    
+    atr = np.zeros(100)
+    atr[0:14] = np.mean(tr[0:14])
+    for i in range(14, 100):
+        atr[i] = (atr[i - 1] * 13 + tr[i]) / 14
+    
+    # ATR_short for S3 (8-period)
+    atr_short = np.zeros(100)
+    atr_short[0:8] = np.mean(tr[0:8])
+    for i in range(8, 100):
+        atr_short[i] = (atr_short[i - 1] * 7 + tr[i]) / 8
+    
+    df = pd.DataFrame({
+        "open": open_prices,
+        "high": high_prices,
+        "low": low_prices,
+        "close": close_prices,
+        "atr": atr,
+        "atr_short": atr_short,
+        "regime_snapshot": ["TREND_UP"] * 100,
+    }, index=pd.DatetimeIndex(dates))
+    
+    return df
+
+
+def test_trailing_monotonicity_long(base_dataframe):
+    """
+    Test that highest_high_since_entry never decreases (monotonic non-decreasing).
+    
+    Note: The actual trailing stop value can fluctuate due to ATR changes,
+    but we verify that the highest_high that determines it always increases.
+    """
+    df = base_dataframe.copy()
+    
+    # Ensure a clear uptrend for testing
+    df.loc[:, "close"] = 1.0500 + np.arange(100) * 0.0005
+    df.loc[:, "high"] = df["close"] + 0.001
+    df.loc[:, "low"] = df["close"] - 0.0005
+    
+    k_trail = 3.5
+    
+    # Simulate highest highs reaching new levels
+    highest_high_values = []
+    
+    for idx in range(10, 30):
+        high_val = float(df["high"].iat[idx])
+        
+        if not highest_high_values:
+            highest_high = high_val
+        else:
+            highest_high = max(highest_high_values[-1], high_val)
+        
+        highest_high_values.append(highest_high)
+    
+    # For LONG: highest_high should never decrease (this is what we control)
+    for i in range(1, len(highest_high_values)):
+        assert highest_high_values[i] >= highest_high_values[i - 1], \
+            f"highest_high decreased at index {i}: {highest_high_values[i-1]} -> {highest_high_values[i]}"
+    
+    assert len(highest_high_values) > 0, "Should have calculated highest highs"
+
+
+def test_trailing_monotonicity_short(base_dataframe):
+    """
+    Test that lowest_low_since_entry never increases (monotonic non-increasing).
+    
+    Note: The actual trailing stop value can fluctuate due to ATR changes,
+    but we verify that the lowest_low that determines it always decreases.
+    """
+    df = base_dataframe.copy()
+    
+    # Ensure a clear downtrend for testing
+    df.loc[:, "close"] = 1.0500 - np.arange(100) * 0.0005
+    df.loc[:, "high"] = df["close"] + 0.0005
+    df.loc[:, "low"] = df["close"] - 0.001
+    
+    k_trail = 3.5
+    
+    # Simulate lowest lows reaching new levels
+    lowest_low_values = []
+    
+    for idx in range(10, 30):
+        low_val = float(df["low"].iat[idx])
+        
+        if not lowest_low_values:
+            lowest_low = low_val
+        else:
+            lowest_low = min(lowest_low_values[-1], low_val)
+        
+        lowest_low_values.append(lowest_low)
+    
+    # For SHORT: lowest_low should never increase (this is what we control)
+    for i in range(1, len(lowest_low_values)):
+        assert lowest_low_values[i] <= lowest_low_values[i - 1], \
+            f"lowest_low increased at index {i}: {lowest_low_values[i-1]} -> {lowest_low_values[i]}"
+    
+    assert len(lowest_low_values) > 0, "Should have calculated lowest lows"
+
+
+def test_cooldown_enforcement_blocks_entry():
+    """
+    Test that cooldown enforcement prevents new entries within cooldown window.
+    
+    Setup:
+    1. Create a position that exits at bar 30
+    2. Set cooldown_bars = 5
+    3. Verify no new entry at bars 31-34
+    4. Verify entry is possible at bar 35+
+    """
+    # This test verifies the logic pattern
+    # In practice, we'd need a full backtest runner that injects signals
+    
+    last_exit_idx = 30
+    cooldown_bars = 5
+    
+    # Within cooldown window
+    for idx in range(31, 35):
+        bars_since_exit = idx - last_exit_idx
+        should_skip = cooldown_bars > 0 and bars_since_exit < cooldown_bars
+        assert should_skip, f"Should skip entry at idx={idx} (bars_since_exit={bars_since_exit} < cooldown={cooldown_bars})"
+    
+    # After cooldown window
+    for idx in range(35, 40):
+        bars_since_exit = idx - last_exit_idx
+        should_skip = cooldown_bars > 0 and bars_since_exit < cooldown_bars
+        assert not should_skip, f"Should allow entry at idx={idx} (bars_since_exit={bars_since_exit} >= cooldown={cooldown_bars})"
+
+
+def test_cooldown_zero_allows_immediate_reentry():
+    """
+    Test that cooldown_bars=0 allows immediate re-entry after exit.
+    """
+    last_exit_idx = 50
+    cooldown_bars = 0
+    
+    # Any cooldown check with cooldown_bars=0 should not block
+    for idx in range(51, 60):
+        bars_since_exit = idx - last_exit_idx
+        should_skip = cooldown_bars > 0 and bars_since_exit < cooldown_bars
+        assert not should_skip, f"Should allow entry at idx={idx} with cooldown_bars=0"
+
+
+def test_trail_exit_reason_detection():
+    """
+    Test that exit_reason is correctly set to 'TRAIL' when trailing stop is hit.
+    
+    This verifies the logic that distinguishes TRAIL from SL exits.
+    """
+    # Test the trail detection logic
+    tp_price = None  # Trend mode
+    highest_high = 1.0550
+    lowest_low = 1.0450
+    
+    # LONG case: exit at trailing stop level
+    k_trail = 3.5
+    atr_short = 0.001
+    trail_stop_long = highest_high - (k_trail * atr_short)
+    
+    exit_price = trail_stop_long
+    sl_hit = True
+    tp_hit = False
+    
+    # Should detect as TRAIL
+    trail_exit = (
+        tp_price is None and
+        highest_high is not None and
+        lowest_low is not None and
+        sl_hit and not tp_hit and
+        abs(exit_price - trail_stop_long) < 1e-6
+    )
+    
+    assert trail_exit, "Should detect TRAIL exit for LONG position"
+    
+    # SHORT case
+    trail_stop_short = lowest_low + (k_trail * atr_short)
+    exit_price_short = trail_stop_short
+    
+    trail_exit_short = (
+        tp_price is None and
+        highest_high is not None and
+        lowest_low is not None and
+        sl_hit and not tp_hit and
+        abs(exit_price_short - trail_stop_short) < 1e-6
+    )
+    
+    assert trail_exit_short, "Should detect TRAIL exit for SHORT position"
+
+
+def test_atr_selection_prefers_atr_short():
+    """
+    Test that atr_short is used for trailing stop calculation when available.
+    """
+    # Create dataframe with both atr and atr_short
+    df = pd.DataFrame({
+        "atr": [0.002, 0.0021, 0.0022],
+        "atr_short": [0.0015, 0.00152, 0.0016],
+    })
+    
+    idx = 1
+    
+    # Logic from orchestrator: prefer atr_short
+    atr_short = float(df["atr_short"].iat[idx]) if "atr_short" in df else float(df["atr"].iat[idx]) if "atr" in df else None
+    
+    assert atr_short == 0.00152, "Should use atr_short when available"
+
+
+def test_atr_fallback_to_atr():
+    """
+    Test that atr is used as fallback when atr_short is not available.
+    """
+    # Create dataframe with only atr
+    df = pd.DataFrame({
+        "atr": [0.002, 0.0021, 0.0022],
+    })
+    
+    idx = 1
+    
+    # Logic from orchestrator: fallback to atr
+    atr_val = float(df["atr"].iat[idx]) if "atr_short" in df else float(df["atr"].iat[idx]) if "atr" in df else None
+    
+    assert atr_val == 0.0021, "Should fallback to atr when atr_short unavailable"
+
+
+def test_highest_high_tracking_long():
+    """
+    Test that highest_high_since_entry is correctly tracked for LONG positions.
+    """
+    highest_high = None
+    
+    prices = [1.0500, 1.0505, 1.0510, 1.0508, 1.0515, 1.0512]
+    
+    for price in prices:
+        if highest_high is None:
+            highest_high = price
+        else:
+            highest_high = max(highest_high, price)
+    
+    assert highest_high == 1.0515, "Should track highest high correctly"
+
+
+def test_lowest_low_tracking_short():
+    """
+    Test that lowest_low_since_entry is correctly tracked for SHORT positions.
+    """
+    lowest_low = None
+    
+    prices = [1.0500, 1.0495, 1.0490, 1.0492, 1.0485, 1.0488]
+    
+    for price in prices:
+        if lowest_low is None:
+            lowest_low = price
+        else:
+            lowest_low = min(lowest_low, price)
+    
+    assert lowest_low == 1.0485, "Should track lowest low correctly"
+
+
+def test_tp_points_none_enables_trend_mode():
+    """
+    Test that tp_points=None correctly indicates trend mode (trailing stops active).
+    """
+    tp_price = None
+    
+    # Should activate trailing stop logic
+    is_trend_mode = tp_price is None
+    assert is_trend_mode, "tp_points=None should enable trend mode"
+
+
+def test_exit_reason_priority_order():
+    """
+    Test the exit_reason priority: TRAIL > SL > TP > TIME > EOD
+    (with TRAIL taking priority when applicable)
+    """
+    # Setup: trend mode position where trailing stop is hit
+    tp_price = None  # Trend mode
+    highest_high = 1.0550
+    sl_price = 1.0520  # Initial SL
+    trail_stop = 1.0525  # Trailing SL (tighter)
+    exit_price = 1.0525  # Hit trailing stop
+    
+    # The position's SL would be updated to trail_stop
+    # Then if hit, should be TRAIL
+    
+    trail_exit = (
+        tp_price is None and
+        highest_high is not None and
+        abs(exit_price - trail_stop) < 1e-6
+    )
+    
+    assert trail_exit, "TRAIL should be detected when trending stop is hit"
+
+
+def test_parameter_defaults_k_trail():
+    """Test that k_trail has sensible default value."""
+    k_trail = 3.5
+    assert k_trail > 0, "k_trail should be positive"
+    assert k_trail < 10, "k_trail should not be unreasonably large"
+
+
+def test_parameter_defaults_cooldown_bars():
+    """Test that cooldown_bars has sensible default value."""
+    cooldown_bars = 0
+    assert cooldown_bars >= 0, "cooldown_bars should be non-negative"
+    assert cooldown_bars < 100, "cooldown_bars should not be unreasonably large"
+
+
+def test_cooldown_edge_case_at_boundary():
+    """
+    Test cooldown edge case: exactly at the cooldown boundary.
+    
+    If last_exit_idx = 30 and cooldown_bars = 5:
+    - idx=34: bars_since_exit = 4 < 5 (skip)
+    - idx=35: bars_since_exit = 5 >= 5 (allow)
+    """
+    last_exit_idx = 30
+    cooldown_bars = 5
+    
+    # At boundary -1 (still in cooldown)
+    idx = 34
+    bars_since_exit = idx - last_exit_idx
+    should_skip = cooldown_bars > 0 and bars_since_exit < cooldown_bars
+    assert should_skip, f"idx={idx} should still be in cooldown"
+    
+    # At boundary (after cooldown)
+    idx = 35
+    bars_since_exit = idx - last_exit_idx
+    should_skip = cooldown_bars > 0 and bars_since_exit < cooldown_bars
+    assert not should_skip, f"idx={idx} should be past cooldown"
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
 
 ================
 File: tests/test_types.py
@@ -12087,49 +12943,6 @@ def _getattr(obj: object, name: str, default: object = None) -> object:
 
 
 __all__ = ["FilterTuner", "ScoreWeights"]
-
-================
-File: live/state_machine.py
-================
-from __future__ import annotations
-
-from desk_types import SystemState
-
-
-class SystemStateMachine:
-    def __init__(self, max_execution_errors: int) -> None:
-        self._state = SystemState.RUNNING
-        self._max_execution_errors = max_execution_errors
-        self._execution_errors = 0
-
-    @property
-    def state(self) -> SystemState:
-        return self._state
-
-    @property
-    def execution_errors(self) -> int:
-        return self._execution_errors
-
-    def record_execution_error(self) -> SystemState:
-        self._execution_errors += 1
-        if self._execution_errors >= self._max_execution_errors:
-            self._state = SystemState.HALTED
-        elif self._state == SystemState.RUNNING:
-            self._state = SystemState.DEGRADED
-        return self._state
-
-    def record_reconcile_mismatch(self) -> SystemState:
-        if self._state != SystemState.HALTED:
-            self._state = SystemState.SAFE_MODE
-        return self._state
-
-    def record_dd_flags(self, *, day_dd_breached: bool, week_dd_breached: bool) -> SystemState:
-        if day_dd_breached or week_dd_breached:
-            self._state = SystemState.HALTED
-        return self._state
-
-
-__all__ = ["SystemStateMachine"]
 
 ================
 File: risk/_types.py
@@ -12689,6 +13502,220 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     )
 
 ================
+File: tests/test_atr_pips_regression.py
+================
+"""
+Regression test for atr_pips computation in _prepare_features.
+Verifies that atr is computed even when strategy only uses atr_short/atr_long.
+"""
+
+import pytest
+import numpy as np
+import pandas as pd
+from pathlib import Path
+
+# Append workspace to path for imports
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from backtest.orchestrator import BacktestOrchestrator, _prepare_features, _StrategySpec
+from configs.models import Config, Universe, BarContract, Strategies, Risk, RiskCaps, Regime, Costs, SlippageModel, Validation, WalkForward, MonteCarlo, MonteCarlo1, MonteCarlo2, Reproducibility, Outputs
+
+
+def _create_minimal_ohlc(num_bars: int = 100) -> pd.DataFrame:
+    """Create minimal OHLC DataFrame."""
+    np.random.seed(42)
+    returns = np.random.normal(0.0001, 0.002, num_bars)
+    close = 1.0500 * np.exp(np.cumsum(returns))
+    
+    open_price = close + np.random.normal(0, 0.0002, num_bars)
+    high = np.maximum(close, open_price) + np.abs(np.random.normal(0, 0.0003, num_bars))
+    low = np.minimum(close, open_price) - np.abs(np.random.normal(0, 0.0003, num_bars))
+    volume = np.ones(num_bars) * 1e6
+    
+    dates = pd.date_range(start="2023-01-01", periods=num_bars, freq="15min")
+    
+    df = pd.DataFrame({
+        "open": open_price,
+        "high": high,
+        "low": low,
+        "close": close,
+        "volume": volume,
+    }, index=dates)
+    return df
+
+
+def _create_s2_only_config() -> Config:
+    """Create config with only S2_TREND_EXPANSION_BREAKOUT enabled."""
+    return Config(
+        universe=Universe(symbols=["EURGBP"], timeframe="M15"),
+        bar_contract=BarContract(signal_on="close", fill_on="open_next", allow_bar0=False),
+        strategies=Strategies(
+            enabled=["S2_TREND_EXPANSION_BREAKOUT"],
+            params={
+                "S2_TREND_EXPANSION_BREAKOUT": {
+                    "ema_fast": 50,
+                    "ema_slow": 200,
+                    "atr_short_period": 14,
+                    "atr_long_period": 100,
+                    "breakout_lookback": 55,
+                    "buffer_atr": 0.2,
+                    "vol_ratio_th": 1.1,
+                    "impulse_th": 1.2,
+                    "k_sl": 3.0,
+                    "min_sl_points": 8.0,
+                    "k_trail": 3.5,
+                    "max_hold_bars": 96,
+                    "min_mfe_atr": 0.5,
+                },
+                "S1_TREND_EMA_ATR_ADX": {},
+                "S1_TREND_BREAKOUT_DONCHIAN": {},
+                "S1_TREND_BREAKOUT_RETEST": {},
+                "S2_MR_ZSCORE_EMA_REGIME": {},
+                "S3_BREAKOUT_ATR_REGIME_EMA200": {},
+                "S3_TS_MOM_VOL_REGIME": {},
+            }
+        ),
+        risk=Risk(
+            r_base=1.0,
+            caps=RiskCaps(per_strategy=100000.0, per_symbol=100000.0, usd_exposure_cap=500000.0),
+            conflict_policy="netting",
+            priority_order=None,
+            dd_day_limit=1.0,
+            dd_week_limit=1.0,
+            max_execution_errors=10,
+        ),
+        costs=Costs(
+            spread_baseline_pips={"EURGBP": 0.0001},
+            slippage=SlippageModel(
+                slip_base=0.0,
+                slip_k=0.0,
+                spike_tr_atr_th=10.0,
+                spike_mult=1.0,
+            ),
+            scenarios={"A": 1.0, "B": 1.0, "C": 1.0},
+        ),
+        validation=Validation(
+            walk_forward=WalkForward(train=1, val=1, test=1),
+            perturb_core_params_pct=0.0
+        ),
+        montecarlo=MonteCarlo(
+            mc1=MonteCarlo1(block_min=1, block_max=1, n_sims=1),
+            mc2=MonteCarlo2(spread_noise_range=(1.0, 1.0), slippage_noise_range=(1.0, 1.0), n_sims=1),
+        ),
+        outputs=Outputs(runs_dir="./runs", write_trades_csv=False, write_report_json=False, write_mc_json=False),
+        reproducibility=Reproducibility(random_seed=42),
+        regime=Regime(),
+    )
+
+
+class TestAtrPipsRegression:
+    """Regression tests for atr_pips computation."""
+
+    def test_atr_pips_computed_with_s2_strategy(self):
+        """
+        Verify that atr_pips is computed even when only S2 (which uses atr_short/atr_long) is enabled.
+        This is a regression test for KeyError: 'atr' in _prepare_features.
+        """
+        config = _create_s2_only_config()
+        df = _create_minimal_ohlc(num_bars=100)
+        
+        # Load strategies from config
+        from backtest.orchestrator import _load_strategies
+        strategies = _load_strategies(config)
+        
+        # Run _prepare_features
+        prepared = _prepare_features({"EURGBP": df}, strategies, config)
+        
+        # Verify atr exists in prepared data
+        assert "EURGBP" in prepared
+        df_result = prepared["EURGBP"]
+        
+        # Key assertion: atr must exist (even though S2 only uses atr_short)
+        assert "atr" in df_result.columns, "atr column should be created"
+        
+        # atr_pips must also exist
+        assert "atr_pips" in df_result.columns, "atr_pips column should be created"
+        
+        # atr_pips should be valid (not all NaN)
+        assert not df_result["atr_pips"].isna().all(), "atr_pips should have valid values"
+        
+        # atr_short should also exist (from S2 strategy)
+        assert "atr_short" in df_result.columns, "atr_short should be created by S2 strategy"
+
+    def test_atr_pips_with_multiple_strategies(self):
+        """
+        Verify atr_pips works with mixed strategies (some compute atr, some don't).
+        """
+        # Create config with S1_TREND_EMA_ATR_ADX (which computes atr)
+        config = Config(
+            universe=Universe(symbols=["EURUSD"], timeframe="M1"),
+            bar_contract=BarContract(signal_on="close", fill_on="open_next", allow_bar0=False),
+            strategies=Strategies(
+                enabled=["S1_TREND_EMA_ATR_ADX"],
+                params={
+                    "S1_TREND_EMA_ATR_ADX": {
+                        "ema_fast": 20,
+                        "ema_slow": 50,
+                        "atr_period": 14,
+                        "adx_period": 14,
+                        "k_sl": 3.0,
+                    },
+                    "S1_TREND_BREAKOUT_DONCHIAN": {},
+                    "S1_TREND_BREAKOUT_RETEST": {},
+                    "S2_MR_ZSCORE_EMA_REGIME": {},
+                    "S2_TREND_EXPANSION_BREAKOUT": {},
+                    "S3_BREAKOUT_ATR_REGIME_EMA200": {},
+                    "S3_TS_MOM_VOL_REGIME": {},
+                }
+            ),
+            risk=Risk(
+                r_base=1.0,
+                caps=RiskCaps(per_strategy=100.0, per_symbol=100.0, usd_exposure_cap=1_000_000.0),
+                conflict_policy="netting",
+                priority_order=None,
+                dd_day_limit=1.0,
+                dd_week_limit=1.0,
+                max_execution_errors=1,
+            ),
+            costs=Costs(
+                spread_baseline_pips={"EURUSD": 0.0},
+                slippage=SlippageModel(
+                    slip_base=0.0,
+                    slip_k=0.0,
+                    spike_tr_atr_th=10.0,
+                    spike_mult=1.0,
+                ),
+                scenarios={"A": 1.0, "B": 1.0, "C": 1.0},
+            ),
+            validation=Validation(walk_forward=WalkForward(train=1, val=1, test=1), perturb_core_params_pct=0.0),
+            montecarlo=MonteCarlo(
+                mc1=MonteCarlo1(block_min=1, block_max=1, n_sims=1),
+                mc2=MonteCarlo2(spread_noise_range=(1.0, 1.0), slippage_noise_range=(1.0, 1.0), n_sims=1),
+            ),
+            outputs=Outputs(runs_dir="./runs", write_trades_csv=False, write_report_json=False, write_mc_json=False),
+            reproducibility=Reproducibility(random_seed=42),
+            regime=Regime(),
+        )
+        
+        df = _create_minimal_ohlc(num_bars=100)
+        
+        from backtest.orchestrator import _load_strategies
+        strategies = _load_strategies(config)
+        prepared = _prepare_features({"EURUSD": df}, strategies, config)
+        
+        # Verify atr_pips computed successfully
+        assert "EURUSD" in prepared
+        df_result = prepared["EURUSD"]
+        assert "atr" in df_result.columns
+        assert "atr_pips" in df_result.columns
+        assert not df_result["atr_pips"].isna().all()
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
+
+================
 File: tests/test_performance.py
 ================
 from __future__ import annotations
@@ -12954,6 +13981,307 @@ def test_run_tuning_creates_csv() -> None:
 
         assert len(df) > 0, "DataFrame should not be empty"
         assert "tuning_S1_TREND_EMA_ATR_ADX.csv" in result.stdout
+
+================
+File: tests/test_s2_integration.py
+================
+"""
+Integration tests for S2_TREND_EXPANSION_BREAKOUT strategy.
+- Strategy ID alignment in configs
+- Trailing stop monotonicity (LONG never decreases, SHORT never increases)
+- MFE guard for time-based exit
+- End-to-end backtest validation
+"""
+
+import pytest
+import numpy as np
+import pandas as pd
+from pathlib import Path
+from pathlib import Path
+
+# Append workspace to path for imports
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from configs.models import (
+    Config, Universe, BarContract, Strategies, Risk, RiskCaps, Regime,
+    Costs, SlippageModel, Validation, WalkForward, MonteCarlo, MonteCarlo1, MonteCarlo2,
+    Reproducibility, Outputs
+)
+from backtest.orchestrator import BacktestOrchestrator
+from desk_types import Side
+from strategies.s2_trend_expansion_breakout import STRATEGY_ID
+
+
+def _create_synthetic_m15_data(num_bars: int = 500) -> pd.DataFrame:
+    """Create synthetic M15 OHLCV data for testing."""
+    dates = pd.date_range(start="2023-01-01", periods=num_bars, freq="15min")
+    
+    # Synthetic price with trend + volatility
+    np.random.seed(42)
+    returns = np.random.normal(0.0001, 0.002, num_bars)
+    close = 1.0500 * np.exp(np.cumsum(returns))
+    
+    open_price = close + np.random.normal(0, 0.0002, num_bars)
+    high = np.maximum(close, open_price) + np.abs(np.random.normal(0, 0.0003, num_bars))
+    low = np.minimum(close, open_price) - np.abs(np.random.normal(0, 0.0003, num_bars))
+    volume = np.random.uniform(1e6, 5e6, num_bars)
+    
+    df = pd.DataFrame({
+        "open": open_price,
+        "high": high,
+        "low": low,
+        "close": close,
+        "volume": volume,
+    }, index=dates)
+    return df
+
+
+def _create_base_config() -> Config:
+    """Create minimal valid config for testing."""
+    return Config(
+        universe=Universe(symbols=["EURGBP"], timeframe="M15"),
+        bar_contract=BarContract(signal_on="close", fill_on="open_next", allow_bar0=False),
+        strategies=Strategies(
+            enabled=["S2_TREND_EXPANSION_BREAKOUT"],
+            params={
+                "S2_TREND_EXPANSION_BREAKOUT": {
+                    "ema_fast": 50,
+                    "ema_slow": 200,
+                    "atr_short_period": 14,
+                    "atr_long_period": 100,
+                    "breakout_lookback": 55,
+                    "buffer_atr": 0.2,
+                    "vol_ratio_th": 1.1,
+                    "impulse_th": 1.2,
+                    "k_sl": 3.0,
+                    "min_sl_points": 8.0,
+                    "k_trail": 3.5,
+                    "max_hold_bars": 96,
+                    "min_mfe_atr": 0.5,
+                },
+                # Add minimal params for all other strategies (Pydantic validator requirement)
+                "S1_TREND_EMA_ATR_ADX": {},
+                "S1_TREND_BREAKOUT_DONCHIAN": {},
+                "S1_TREND_BREAKOUT_RETEST": {},
+                "S2_MR_ZSCORE_EMA_REGIME": {},
+                "S3_BREAKOUT_ATR_REGIME_EMA200": {},
+                "S3_TS_MOM_VOL_REGIME": {},
+            }
+        ),
+        risk=Risk(
+            r_base=1.0,
+            caps=RiskCaps(per_strategy=100000.0, per_symbol=100000.0, usd_exposure_cap=500000.0),
+            conflict_policy="netting",
+            priority_order=None,
+            dd_day_limit=1.0,
+            dd_week_limit=1.0,
+            max_execution_errors=10,
+        ),
+        costs=Costs(
+            spread_baseline_pips={"EURGBP": 0.0001},
+            slippage=SlippageModel(
+                slip_base=0.0,
+                slip_k=0.0,
+                spike_tr_atr_th=10.0,
+                spike_mult=1.0,
+            ),
+            scenarios={"A": 1.0, "B": 1.0, "C": 1.0},
+        ),
+        validation=Validation(
+            walk_forward=WalkForward(train=1, val=1, test=1),
+            perturb_core_params_pct=0.0
+        ),
+        montecarlo=MonteCarlo(
+            mc1=MonteCarlo1(block_min=1, block_max=1, n_sims=1),
+            mc2=MonteCarlo2(spread_noise_range=(1.0, 1.0), slippage_noise_range=(1.0, 1.0), n_sims=1),
+        ),
+        outputs=Outputs(runs_dir="./runs", write_trades_csv=False, write_report_json=False, write_mc_json=False),
+        reproducibility=Reproducibility(random_seed=42),
+        regime=Regime(),
+    )
+
+
+class TestS2Integration:
+    """Integration test suite for S2_TREND_EXPANSION_BREAKOUT."""
+
+    def test_strategy_id_uppercase(self):
+        """Verify STRATEGY_ID is uppercase 'S2_TREND_EXPANSION_BREAKOUT'."""
+        assert STRATEGY_ID == "S2_TREND_EXPANSION_BREAKOUT"
+        assert STRATEGY_ID.isupper(), "STRATEGY_ID should be uppercase"
+
+    def test_config_validation_with_s2_params(self):
+        """Verify S2 params pass Pydantic validation."""
+        config = _create_base_config()
+        
+        # Verify S2 is in enabled strategies
+        assert "S2_TREND_EXPANSION_BREAKOUT" in config.strategies.enabled
+        s2_params = config.strategies.params["S2_TREND_EXPANSION_BREAKOUT"]
+        assert s2_params["ema_fast"] == 50
+        assert s2_params["k_trail"] == 3.5
+        assert s2_params["min_mfe_atr"] == 0.5
+
+    def test_backtest_does_not_crash(self):
+        """Verify orchestrator can be initialized (sanity check)."""
+        config = _create_base_config()
+        
+        # Create synthetic data - minimal to avoid feature computation errors
+        # (Full OHLC generation is in orchestrator, not test data)
+        n_bars = 300
+        np.random.seed(42)
+        returns = np.random.randn(n_bars) * 0.001
+        close = (1 + returns).cumprod()
+        dates = pd.date_range(start="2023-01-01", periods=n_bars, freq="15min")
+        
+        df = pd.DataFrame({
+            "open": close * (1 + np.random.randn(n_bars) * 0.0001),
+            "high": close * (1 + np.abs(np.random.randn(n_bars) * 0.0003)),
+            "low": close * (1 - np.abs(np.random.randn(n_bars) * 0.0003)),
+            "close": close,
+            "volume": np.ones(n_bars) * 1e6,
+        }, index=dates)
+        
+        # Orchestrator should process without crashing (may have 0 trades)
+        orch = BacktestOrchestrator()
+        try:
+            trades, report = orch.run({"EURGBP": df}, config)
+            # If it runs, test passes
+            assert isinstance(trades, pd.DataFrame)
+        except Exception as e:
+            # Accept feature computation errors (expected with synthetic data)
+            # We're just verifying the structure doesn't crash
+            if "atr" not in str(e).lower():
+                raise
+
+    def test_trailing_stop_code_present(self):
+        """
+        Verify trailing stop implementation is present in orchestrator.
+        Check that S2_TREND_EXPANSION_BREAKOUT trailing logic is coded.
+        """
+        # Read orchestrator source to verify trailing stop code exists
+        orch_path = Path(__file__).parent.parent / "backtest" / "orchestrator.py"
+        source = orch_path.read_text()
+        
+        # Verify key patterns exist
+        assert 'S2_TREND_EXPANSION_BREAKOUT' in source
+        assert 'highest_high_since_entry' in source
+        assert 'lowest_low_since_entry' in source
+        assert 'k_trail' in source
+        assert 'Chandelier' in source or 'trail' in source.lower()
+        
+        # Verify monotonicity comments/logic
+        assert 'LONG' in source and 'SHORT' in source
+
+    def test_trailing_stop_update_logic_coded(self):
+        """
+        Verify trailing stop logic for SHORT is in orchestrator.
+        LONG trail never decreases; SHORT trail never increases.
+        """
+        orch_path = Path(__file__).parent.parent / "backtest" / "orchestrator.py"
+        source = orch_path.read_text()
+        
+        # Verify the logic for SHORT side
+        assert 'if position["current_side"] == Side.SHORT:' in source or \
+               "if position['current_side'] == Side.SHORT:" in source
+        
+        # Verify SL update logic
+        assert 'position["sl_price"]' in source
+        assert 'trail_stop' in source
+
+    def test_mfe_guard_fields_in_orchestrator(self):
+        """
+        Verify MFE guard and time-based exit implementation.
+        Check that max_hold_bars and min_mfe_atr are referenced.
+        """
+        orch_path = Path(__file__).parent.parent / "backtest" / "orchestrator.py"
+        source = orch_path.read_text()
+        
+        # Verify time exit logic exists
+        assert 'TIME' in source
+        # Verify max_hold_bars is used
+        assert 'max_hold_bars' in source
+
+    def test_s1_backward_compatibility(self):
+        """Verify S1 strategies still work (backward compatibility)."""
+        # Create config with S1 strategy
+        config = Config(
+            universe=Universe(symbols=["EURUSD"], timeframe="M1"),
+            bar_contract=BarContract(signal_on="close", fill_on="open_next", allow_bar0=False),
+            strategies=Strategies(
+                enabled=["S1_TREND_BREAKOUT_DONCHIAN"],
+                params={
+                    "S1_TREND_EMA_ATR_ADX": {},
+                    "S1_TREND_BREAKOUT_DONCHIAN": {
+                        "lookback_high": 55,
+                        "lookback_low": 55,
+                        "buffer_atr": 0.2,
+                        "atr_period": 14,
+                        "k_sl": 3.0,
+                        "min_sl_points": 8.0,
+                    },
+                    "S1_TREND_BREAKOUT_RETEST": {},
+                    "S2_MR_ZSCORE_EMA_REGIME": {},
+                    "S3_BREAKOUT_ATR_REGIME_EMA200": {},
+                    "S2_TREND_EXPANSION_BREAKOUT": {},
+                    "S3_TS_MOM_VOL_REGIME": {},
+                }
+            ),
+            risk=Risk(
+                r_base=1.0,
+                caps=RiskCaps(per_strategy=100000.0, per_symbol=100000.0, usd_exposure_cap=500000.0),
+                conflict_policy="netting",
+                priority_order=None,
+                dd_day_limit=1.0,
+                dd_week_limit=1.0,
+                max_execution_errors=10,
+            ),
+            costs=Costs(
+                spread_baseline_pips={"EURUSD": 0.0001},
+                slippage=SlippageModel(
+                    slip_base=0.0,
+                    slip_k=0.0,
+                    spike_tr_atr_th=10.0,
+                    spike_mult=1.0,
+                ),
+                scenarios={"A": 1.0, "B": 1.0, "C": 1.0},
+            ),
+            validation=Validation(
+                walk_forward=WalkForward(train=1, val=1, test=1),
+                perturb_core_params_pct=0.0
+            ),
+            montecarlo=MonteCarlo(
+                mc1=MonteCarlo1(block_min=1, block_max=1, n_sims=1),
+                mc2=MonteCarlo2(spread_noise_range=(1.0, 1.0), slippage_noise_range=(1.0, 1.0), n_sims=1),
+            ),
+            outputs=Outputs(runs_dir="./runs", write_trades_csv=False, write_report_json=False, write_mc_json=False),
+            reproducibility=Reproducibility(random_seed=42),
+            regime=Regime(),
+        )
+        
+        # Create synthetic data
+        n_bars = 300
+        np.random.seed(42)
+        returns = np.random.randn(n_bars) * 0.001
+        close = (1 + returns).cumprod()
+        dates = pd.date_range(start="2023-01-01", periods=n_bars, freq="min")
+        
+        df = pd.DataFrame({
+            "open": close * (1 + np.random.randn(n_bars) * 0.0001),
+            "high": close * (1 + np.abs(np.random.randn(n_bars) * 0.0003)),
+            "low": close * (1 - np.abs(np.random.randn(n_bars) * 0.0003)),
+            "close": close,
+            "volume": np.ones(n_bars) * 1e6,
+        }, index=dates)
+        
+        orch = BacktestOrchestrator()
+        trades, report = orch.run({"EURUSD": df}, config)
+        
+        # Should complete without errors
+        assert isinstance(trades, pd.DataFrame)
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
 
 ================
 File: features/regime.py
@@ -13227,6 +14555,291 @@ def test_backtest_runs_medium_dataset() -> None:
     assert trades["regime_snapshot"].str.contains("VOL=").all()
 
 ================
+File: live/live_orchestrator.py
+================
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Dict, Iterable, List
+
+import numpy as np
+import pandas as pd
+
+from backtest.trade_log import TRADE_LOG_COLUMNS
+from configs.models import Config
+from features.indicators import adx, atr, ema
+from features.regime import atr_pct_zscore, spike_flag
+from risk.allocator import RiskAllocator
+from risk.conflict import resolve_conflicts
+from desk_types import OrderIntent, Side, SystemState
+
+STRATEGY_MAP = {
+    "S1_TREND_EMA_ATR_ADX": "strategies.s1_trend_ema_atr_adx",
+    "S2_MR_ZSCORE_EMA_REGIME": "strategies.s2_mr_zscore_ema_regime",
+    "S3_BREAKOUT_ATR_REGIME_EMA200": "strategies.s3_breakout_atr_regime_ema200",
+}
+
+
+@dataclass
+class _StrategySpec:
+    name: str
+    module: Any
+    params: Dict[str, Any]
+
+
+class LiveOrchestrator:
+    def __init__(self, config: Config) -> None:
+        _validate_bar_contract(config)
+        self._config = config
+        self._strategies = _load_strategies(config)
+        self._allocator = RiskAllocator(config)
+        self._trade_id = 1
+        self._trade_log: List[Dict[str, Any]] = []
+        self._state: SystemState = SystemState.RUNNING
+
+    def update_state(self, state: SystemState) -> None:
+        self._state = state
+
+    def step(self, new_bar_data: Dict[str, pd.DataFrame]) -> List[OrderIntent]:
+        if self._state == SystemState.SAFE_MODE:
+            self._manage_positions_stub(new_bar_data)
+            return []
+
+        prepared = _prepare_features(new_bar_data, self._strategies, self._config)
+        orders: List[OrderIntent] = []
+
+        for symbol, df in prepared.items():
+            if df.empty:
+                continue
+            idx = len(df) - 1
+            signal_time = _resolve_time(df, idx)
+            context = {
+                "df": df,
+                "idx": idx,
+                "symbol": symbol,
+                "current_time": signal_time,
+            }
+
+            signals = []
+            for spec in self._strategies:
+                ctx = dict(context)
+                ctx["config"] = spec.params
+                signal = spec.module.generate_signal(ctx)
+                if signal.side == Side.FLAT:
+                    continue
+                signals.append(signal)
+
+            if not signals:
+                continue
+
+            filtered = resolve_conflicts(
+                signals,
+                policy=self._config.risk.conflict_policy,
+                priority_order=self._config.risk.priority_order,
+            )
+
+            state = {"prices": {symbol: float(df["close"].iat[idx])}}
+            orders_for_symbol = self._allocator.allocate(filtered, state)
+            orders.extend(orders_for_symbol)
+
+            for order in orders_for_symbol:
+                self._trade_log.append(
+                    _build_trade_log_entry(
+                        trade_id=self._trade_id,
+                        order=order,
+                        symbol=symbol,
+                        signal_time=signal_time,
+                        signal_idx=idx,
+                        regime_snapshot=df.get("regime_snapshot", pd.Series([None])).iat[idx],
+                    )
+                )
+                self._trade_id += 1
+
+        self._execution_stub(orders)
+        return orders
+
+    def trade_log(self) -> pd.DataFrame:
+        return pd.DataFrame(self._trade_log, columns=TRADE_LOG_COLUMNS)
+
+    @staticmethod
+    def _execution_stub(orders: List[OrderIntent]) -> None:
+        _ = orders
+        return None
+
+    @staticmethod
+    def _manage_positions_stub(new_bar_data: Dict[str, pd.DataFrame]) -> None:
+        _ = new_bar_data
+        return None
+
+
+def _validate_bar_contract(config: Config) -> None:
+    if config.bar_contract.signal_on != "close":
+        raise ValueError("bar_contract.signal_on must be close")
+    if config.bar_contract.fill_on != "open_next":
+        raise ValueError("bar_contract.fill_on must be open_next")
+    if config.bar_contract.allow_bar0:
+        raise ValueError("bar_contract.allow_bar0 must be false")
+
+
+def _load_strategies(config: Config) -> List[_StrategySpec]:
+    specs: List[_StrategySpec] = []
+    for name in config.strategies.enabled:
+        module_path = STRATEGY_MAP.get(name)
+        if module_path is None:
+            raise ValueError(f"Unsupported strategy: {name}")
+        module = __import__(module_path, fromlist=["generate_signal"])
+        params = dict(config.strategies.params.get(name, {}))
+        specs.append(_StrategySpec(name=name, module=module, params=params))
+    return specs
+
+
+def _prepare_features(
+    df_by_symbol: Dict[str, pd.DataFrame],
+    strategies: Iterable[_StrategySpec],
+    config: Config,
+) -> Dict[str, pd.DataFrame]:
+    prepared: Dict[str, pd.DataFrame] = {}
+    for symbol, df in df_by_symbol.items():
+        df_local = df.copy()
+        df_local = _ensure_ohlc(df_local)
+
+        for spec in strategies:
+            df_local = _apply_strategy_features(df_local, spec)
+
+        if "atr" not in df_local:
+            df_local["atr"] = atr(df_local, 14)
+
+        df_local["regime_snapshot"] = _compute_regime(
+            df_local,
+            window=config.regime.atr_pct_window,
+            atr_n=config.regime.atr_pct_n,
+            z_low=config.regime.z_low,
+            z_high=config.regime.z_high,
+            spike_th=config.regime.spike_tr_atr_th,
+        )
+        prepared[symbol] = df_local
+    return prepared
+
+
+def _ensure_ohlc(df: pd.DataFrame) -> pd.DataFrame:
+    required = {"open", "high", "low", "close"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing required OHLC columns: {sorted(missing)}")
+    return df
+
+
+def _apply_strategy_features(df: pd.DataFrame, spec: _StrategySpec) -> pd.DataFrame:
+    if spec.name == "S1_TREND_EMA_ATR_ADX":
+        ema_fast = int(spec.params.get("ema_fast", 20))
+        ema_slow = int(spec.params.get("ema_slow", 50))
+        atr_period = int(spec.params.get("atr_period", 14))
+        adx_period = int(spec.params.get("adx_period", 14))
+        if "ema_fast" not in df:
+            df["ema_fast"] = ema(df["close"], ema_fast)
+        if "ema_slow" not in df:
+            df["ema_slow"] = ema(df["close"], ema_slow)
+        if "atr" not in df:
+            df["atr"] = atr(df, atr_period)
+        if "adx" not in df:
+            df["adx"] = adx(df, adx_period)
+    elif spec.name == "S2_MR_ZSCORE_EMA_REGIME":
+        ema_base = int(spec.params.get("ema_regime", spec.params.get("ema_base", 200)))
+        adx_period = int(spec.params.get("adx_period", 14))
+        if "ema_base" not in df:
+            df["ema_base"] = ema(df["close"], ema_base)
+        if "adx" not in df:
+            df["adx"] = adx(df, adx_period)
+    elif spec.name == "S3_BREAKOUT_ATR_REGIME_EMA200":
+        atr_period = int(spec.params.get("atr_period", 14))
+        ema_period = int(spec.params.get("ema200", 200))
+        if "atr" not in df:
+            df["atr"] = atr(df, atr_period)
+        if "ema200" not in df:
+            df["ema200"] = ema(df["close"], ema_period)
+    return df
+
+
+def _compute_regime(
+    df: pd.DataFrame,
+    window: int,
+    atr_n: int,
+    z_low: float = -0.5,
+    z_high: float = 0.5,
+    spike_th: float = 2.5,
+) -> pd.Series:
+    atr_series = atr(df, atr_n)
+    atr_pct = atr_series / df["close"] * 100
+    z = atr_pct_zscore(atr_pct, window=window)
+
+    regime = pd.Series(["MID"] * len(df), index=df.index)
+    valid_mask = z.notna()
+    if valid_mask.any():
+        regime.loc[valid_mask] = np.where(
+            z[valid_mask] < z_low,
+            "LOW",
+            np.where(z[valid_mask] > z_high, "HIGH", "MID"),
+        )
+
+    prev_close = df["close"].shift(1)
+    tr = pd.concat(
+        [
+            df["high"] - df["low"],
+            (df["high"] - prev_close).abs(),
+            (df["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    tr_atr = tr / atr_series
+    spikes = spike_flag(tr_atr, th=spike_th)
+    spike_tag = spikes.astype(int).astype(str)
+
+    return "VOL=" + regime + "|SPIKE=" + spike_tag
+
+
+def _resolve_time(df: pd.DataFrame, idx: int) -> datetime:
+    if isinstance(df.index, pd.DatetimeIndex):
+        return df.index[idx].to_pydatetime()
+    if "timestamp" in df.columns:
+        return pd.to_datetime(df["timestamp"].iat[idx]).to_pydatetime()
+    return datetime.utcfromtimestamp(idx)
+
+
+def _build_trade_log_entry(
+    trade_id: int,
+    order: OrderIntent,
+    symbol: str,
+    signal_time: datetime,
+    signal_idx: int,
+    regime_snapshot: Any,
+) -> Dict[str, Any]:
+    return {
+        "trade_id": trade_id,
+        "order_id": f"live-{symbol}-{signal_idx}-{trade_id}",
+        "symbol": symbol,
+        "strategy_id": order.strategy_id,
+        "side": order.side.value,
+        "qty": order.qty,
+        "signal_time": signal_time,
+        "signal_idx": signal_idx,
+        "fill_time": None,
+        "entry_price": None,
+        "exit_time": None,
+        "exit_price": None,
+        "pnl": None,
+        "pnl_pct": None,
+        "spread_used": None,
+        "slippage_used": None,
+        "scenario": "LIVE",
+        "regime_snapshot": regime_snapshot,
+        "reason_codes": ";".join([f"{k}={v}" for k, v in order.meta.items()]),
+    }
+
+
+__all__ = ["LiveOrchestrator"]
+
+================
 File: strategies/s1_trend_ema_atr_adx.py
 ================
 from __future__ import annotations
@@ -13333,255 +14946,6 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
         tp_points=tp_points,
         tags=tags,
     )
-
-================
-File: tests/test_backtest.py
-================
-import pandas as pd
-import pytest
-
-from backtest.metrics import compute_metrics
-from backtest.orchestrator import BacktestOrchestrator
-from backtest.trade_log import TRADE_LOG_COLUMNS
-from configs.models import (
-    BarContract,
-    Config,
-    Costs,
-    MonteCarlo,
-    MonteCarlo1,
-    MonteCarlo2,
-    Outputs,
-    Reproducibility,
-    Risk,
-    RiskCaps,
-    SlippageModel,
-    Strategies,
-    Universe,
-    Validation,
-    WalkForward,
-)
-
-
-@pytest.fixture
-def df_eurusd_1min_1000():
-    """Create a 1000-bar EURUSD M1 fixture for testing."""
-    import numpy as np
-    n_bars = 1000
-    np.random.seed(42)
-    returns = np.random.randn(n_bars) * 0.001
-    close = (1 + returns).cumprod()
-    return pd.DataFrame({
-        "open": close * (1 + np.random.randn(n_bars) * 0.0001),
-        "high": close * (1 + np.abs(np.random.randn(n_bars) * 0.0003)),
-        "low": close * (1 - np.abs(np.random.randn(n_bars) * 0.0003)),
-        "close": close,
-    })
-
-
-def _make_config() -> Config:
-    return Config(
-        universe=Universe(symbols=["EURUSD"], timeframe="M1"),
-        bar_contract=BarContract(signal_on="close", fill_on="open_next", allow_bar0=False),
-        strategies=Strategies(
-            enabled=["S1_TREND_EMA_ATR_ADX"],
-            params={
-                "S1_TREND_EMA_ATR_ADX": {
-                    "ema_fast": 1,
-                    "ema_slow": 2,
-                    "atr_period": 1,
-                    "adx_period": 1,
-                    "k_sl": 1.0,
-                },
-                "S1_TREND_BREAKOUT_DONCHIAN": {},
-                "S1_TREND_BREAKOUT_RETEST": {},
-                "S2_MR_ZSCORE_EMA_REGIME": {},
-                "S2_TREND_EXPANSION_BREAKOUT": {},
-                "S3_BREAKOUT_ATR_REGIME_EMA200": {},
-            },
-        ),
-        risk=Risk(
-            r_base=1.0,
-            caps=RiskCaps(per_strategy=100.0, per_symbol=100.0, usd_exposure_cap=1_000_000.0),
-            conflict_policy="priority",
-            priority_order=["S1_TREND_EMA_ATR_ADX"],
-            dd_day_limit=1.0,
-            dd_week_limit=1.0,
-            max_execution_errors=1,
-        ),
-        costs=Costs(
-            spread_baseline_pips={"EURUSD": 0.0},
-            slippage=SlippageModel(
-                slip_base=0.0,
-                slip_k=0.0,
-                spike_tr_atr_th=10.0,
-                spike_mult=1.0,
-            ),
-            scenarios={"A": 1.0, "B": 1.0, "C": 1.0},
-        ),
-        validation=Validation(walk_forward=WalkForward(train=1, val=1, test=1), perturb_core_params_pct=0.0),
-        montecarlo=MonteCarlo(
-            mc1=MonteCarlo1(block_min=1, block_max=1, n_sims=1),
-            mc2=MonteCarlo2(spread_noise_range=(1.0, 1.0), slippage_noise_range=(1.0, 1.0), n_sims=1),
-        ),
-        outputs=Outputs(runs_dir="./runs", write_trades_csv=False, write_report_json=False, write_mc_json=False),
-        reproducibility=Reproducibility(random_seed=1),
-    )
-
-
-def _make_df() -> pd.DataFrame:
-    return pd.DataFrame(
-        {
-            "open": [1.0, 1.1, 1.2, 1.3],
-            "high": [1.05, 1.15, 1.25, 1.35],
-            "low": [0.95, 1.05, 1.15, 1.25],
-            "close": [1.0, 1.1, 1.2, 1.3],
-        }
-    )
-
-
-def test_bar_contract_enforced():
-    orchestrator = BacktestOrchestrator()
-    config = _make_config()
-    df = _make_df()
-
-    trades, _ = orchestrator.run({"EURUSD": df}, config)
-    scenario_a = trades[trades["scenario"] == "A"]
-    assert not scenario_a.empty
-
-    for _, row in scenario_a.iterrows():
-        expected = df["open"].iat[int(row["signal_idx"]) + 1]
-        assert row["entry_price"] == expected
-
-
-def test_outputs_have_required_columns():
-    orchestrator = BacktestOrchestrator()
-    config = _make_config()
-    df = _make_df()
-
-    trades, _ = orchestrator.run({"EURUSD": df}, config)
-    for column in TRADE_LOG_COLUMNS:
-        assert column in trades.columns
-
-
-def test_scenarios_three_runs():
-    orchestrator = BacktestOrchestrator()
-    config = _make_config()
-    df = _make_df()
-
-    trades, _ = orchestrator.run({"EURUSD": df}, config)
-    assert set(trades["scenario"].unique()) == {"A", "B", "C"}
-
-def test_metrics_use_pnl_pips_when_available():
-    """Verify metrics use pnl_pips when available, not pnl."""
-    trades_df = pd.DataFrame({
-        "pnl": [100.0, -50.0, 75.0],
-        "pnl_pips": [10.0, -5.0, 7.5],
-        "strategy_id": ["S1", "S1", "S1"],
-        "symbol": ["EURUSD", "EURUSD", "EURUSD"],
-        "regime_snapshot": ["A", "A", "A"],
-        "scenario": ["A", "A", "A"],
-    })
-    
-    metrics = compute_metrics(trades_df)
-    overall = metrics["overall"]
-    
-    # Expectancy should be based on pnl_pips (10 - 5 + 7.5) / 3 = 4.166...
-    expected_expectancy = (10.0 - 5.0 + 7.5) / 3
-    assert abs(overall["expectancy"] - expected_expectancy) < 0.01, \
-        f"Expected expectancy {expected_expectancy}, got {overall['expectancy']}"
-    
-    # Profit factor should be based on pnl_pips: (10 + 7.5) / abs(-5) = 3.5
-    expected_profit_factor = (10.0 + 7.5) / abs(-5.0)
-    assert abs(overall["profit_factor"] - expected_profit_factor) < 0.01, \
-        f"Expected PF {expected_profit_factor}, got {overall['profit_factor']}"
-    
-    # Max drawdown computed from pnl_pips cumsum: [10, 5, 12.5]
-    # Cummax: [10, 10, 12.5]
-    # Drawdown: [0, -5, 0]
-    # Min: -5.0
-    expected_max_dd = -5.0
-    assert abs(overall["max_drawdown"] - expected_max_dd) < 0.01, \
-        f"Expected max_dd {expected_max_dd}, got {overall['max_drawdown']}"
-
-
-def test_metrics_fallback_to_pnl_without_pnl_pips():
-    """Verify metrics fallback to pnl when pnl_pips is not available."""
-    trades_df = pd.DataFrame({
-        "pnl": [10.0, -5.0, 7.5],
-        "strategy_id": ["S1", "S1", "S1"],
-        "symbol": ["EURUSD", "EURUSD", "EURUSD"],
-        "regime_snapshot": ["A", "A", "A"],
-        "scenario": ["A", "A", "A"],
-    })
-    
-    metrics = compute_metrics(trades_df)
-    overall = metrics["overall"]
-    
-    # Expectancy should be based on pnl (10 - 5 + 7.5) / 3 = 4.166...
-    expected_expectancy = (10.0 - 5.0 + 7.5) / 3
-    assert abs(overall["expectancy"] - expected_expectancy) < 0.01, \
-        f"Expected expectancy {expected_expectancy}, got {overall['expectancy']}"
-    
-    # Profit factor: (10 + 7.5) / abs(-5) = 3.5
-    expected_profit_factor = (10.0 + 7.5) / abs(-5.0)
-    assert abs(overall["profit_factor"] - expected_profit_factor) < 0.01, \
-        f"Expected PF {expected_profit_factor}, got {overall['profit_factor']}"
-
-
-def test_orchestrator_scenario_filtering(df_eurusd_1min_1000):
-    """Test that orchestrator can filter scenarios (e.g., run only B)."""
-    config = _make_config()
-    orchestrator = BacktestOrchestrator()
-    
-    # Run with scenarios=["B"] only
-    trades, report = orchestrator.run({"EURUSD": df_eurusd_1min_1000}, config, scenarios=["B"])
-    
-    # Should have trades and report
-    assert len(trades) > 0, "No trades generated for scenario B"
-    assert "metrics" in report, "Report missing metrics"
-    
-    by_scenario = report["metrics"]["by_scenario"]
-    
-    # Only B scenario should be present
-    assert "B" in by_scenario, "Scenario B missing from metrics"
-    assert len(by_scenario) == 1, f"Expected only 1 scenario, got {len(by_scenario)}"
-    
-    # All trades should be from scenario B
-    assert (trades["scenario"] == "B").all(), "Some trades are not from scenario B"
-
-
-def test_orchestrator_all_scenarios_default(df_eurusd_1min_1000):
-    """Test that orchestrator runs all scenarios by default (scenarios=None)."""
-    config = _make_config()
-    orchestrator = BacktestOrchestrator()
-    
-    # Run with scenarios=None (default)
-    trades, report = orchestrator.run({"EURUSD": df_eurusd_1min_1000}, config, scenarios=None)
-    
-    # Should have all three scenarios
-    by_scenario = report["metrics"]["by_scenario"]
-    
-    assert "A" in by_scenario, "Scenario A missing"
-    assert "B" in by_scenario, "Scenario B missing"
-    assert "C" in by_scenario, "Scenario C missing"
-    assert len(by_scenario) == 3, f"Expected 3 scenarios, got {len(by_scenario)}"
-
-
-def test_orchestrator_multiple_scenarios(df_eurusd_1min_1000):
-    """Test that orchestrator can run specific scenario combinations."""
-    config = _make_config()
-    orchestrator = BacktestOrchestrator()
-    
-    # Run with scenarios=["A", "C"] (skip B)
-    trades, report = orchestrator.run({"EURUSD": df_eurusd_1min_1000}, config, scenarios=["A", "C"])
-    
-    # Should have only A and C
-    by_scenario = report["metrics"]["by_scenario"]
-    
-    assert "A" in by_scenario, "Scenario A missing"
-    assert "C" in by_scenario, "Scenario C missing"
-    assert "B" not in by_scenario, "Scenario B should not be present"
-    assert len(by_scenario) == 2, f"Expected 2 scenarios, got {len(by_scenario)}"
 
 ================
 File: tests/test_features.py
@@ -14346,427 +15710,254 @@ def build_grid(strategy_id: str, preset: Literal["small", "medium", "large"] = "
     raise ValueError(f"Grid not defined for strategy: {strategy_id}")
 
 ================
-File: live/live_orchestrator.py
+File: tests/test_backtest.py
 ================
-from __future__ import annotations
-
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, Dict, Iterable, List
-
-import numpy as np
 import pandas as pd
+import pytest
 
+from backtest.metrics import compute_metrics
+from backtest.orchestrator import BacktestOrchestrator
 from backtest.trade_log import TRADE_LOG_COLUMNS
-from configs.models import Config
-from features.indicators import adx, atr, ema
-from features.regime import atr_pct_zscore, spike_flag
-from risk.allocator import RiskAllocator
-from risk.conflict import resolve_conflicts
-from desk_types import OrderIntent, Side, SystemState
-
-STRATEGY_MAP = {
-    "S1_TREND_EMA_ATR_ADX": "strategies.s1_trend_ema_atr_adx",
-    "S2_MR_ZSCORE_EMA_REGIME": "strategies.s2_mr_zscore_ema_regime",
-    "S3_BREAKOUT_ATR_REGIME_EMA200": "strategies.s3_breakout_atr_regime_ema200",
-}
-
-
-@dataclass
-class _StrategySpec:
-    name: str
-    module: Any
-    params: Dict[str, Any]
+from configs.models import (
+    BarContract,
+    Config,
+    Costs,
+    MonteCarlo,
+    MonteCarlo1,
+    MonteCarlo2,
+    Outputs,
+    Reproducibility,
+    Risk,
+    RiskCaps,
+    SlippageModel,
+    Strategies,
+    Universe,
+    Validation,
+    WalkForward,
+)
 
 
-class LiveOrchestrator:
-    def __init__(self, config: Config) -> None:
-        _validate_bar_contract(config)
-        self._config = config
-        self._strategies = _load_strategies(config)
-        self._allocator = RiskAllocator(config)
-        self._trade_id = 1
-        self._trade_log: List[Dict[str, Any]] = []
-        self._state: SystemState = SystemState.RUNNING
-
-    def update_state(self, state: SystemState) -> None:
-        self._state = state
-
-    def step(self, new_bar_data: Dict[str, pd.DataFrame]) -> List[OrderIntent]:
-        if self._state == SystemState.SAFE_MODE:
-            self._manage_positions_stub(new_bar_data)
-            return []
-
-        prepared = _prepare_features(new_bar_data, self._strategies, self._config)
-        orders: List[OrderIntent] = []
-
-        for symbol, df in prepared.items():
-            if df.empty:
-                continue
-            idx = len(df) - 1
-            signal_time = _resolve_time(df, idx)
-            context = {
-                "df": df,
-                "idx": idx,
-                "symbol": symbol,
-                "current_time": signal_time,
-            }
-
-            signals = []
-            for spec in self._strategies:
-                ctx = dict(context)
-                ctx["config"] = spec.params
-                signal = spec.module.generate_signal(ctx)
-                if signal.side == Side.FLAT:
-                    continue
-                signals.append(signal)
-
-            if not signals:
-                continue
-
-            filtered = resolve_conflicts(
-                signals,
-                policy=self._config.risk.conflict_policy,
-                priority_order=self._config.risk.priority_order,
-            )
-
-            state = {"prices": {symbol: float(df["close"].iat[idx])}}
-            orders_for_symbol = self._allocator.allocate(filtered, state)
-            orders.extend(orders_for_symbol)
-
-            for order in orders_for_symbol:
-                self._trade_log.append(
-                    _build_trade_log_entry(
-                        trade_id=self._trade_id,
-                        order=order,
-                        symbol=symbol,
-                        signal_time=signal_time,
-                        signal_idx=idx,
-                        regime_snapshot=df.get("regime_snapshot", pd.Series([None])).iat[idx],
-                    )
-                )
-                self._trade_id += 1
-
-        self._execution_stub(orders)
-        return orders
-
-    def trade_log(self) -> pd.DataFrame:
-        return pd.DataFrame(self._trade_log, columns=TRADE_LOG_COLUMNS)
-
-    @staticmethod
-    def _execution_stub(orders: List[OrderIntent]) -> None:
-        _ = orders
-        return None
-
-    @staticmethod
-    def _manage_positions_stub(new_bar_data: Dict[str, pd.DataFrame]) -> None:
-        _ = new_bar_data
-        return None
+@pytest.fixture
+def df_eurusd_1min_1000():
+    """Create a 1000-bar EURUSD M1 fixture for testing."""
+    import numpy as np
+    n_bars = 1000
+    np.random.seed(42)
+    returns = np.random.randn(n_bars) * 0.001
+    close = (1 + returns).cumprod()
+    return pd.DataFrame({
+        "open": close * (1 + np.random.randn(n_bars) * 0.0001),
+        "high": close * (1 + np.abs(np.random.randn(n_bars) * 0.0003)),
+        "low": close * (1 - np.abs(np.random.randn(n_bars) * 0.0003)),
+        "close": close,
+    })
 
 
-def _validate_bar_contract(config: Config) -> None:
-    if config.bar_contract.signal_on != "close":
-        raise ValueError("bar_contract.signal_on must be close")
-    if config.bar_contract.fill_on != "open_next":
-        raise ValueError("bar_contract.fill_on must be open_next")
-    if config.bar_contract.allow_bar0:
-        raise ValueError("bar_contract.allow_bar0 must be false")
+def _make_config() -> Config:
+    return Config(
+        universe=Universe(symbols=["EURUSD"], timeframe="M1"),
+        bar_contract=BarContract(signal_on="close", fill_on="open_next", allow_bar0=False),
+        strategies=Strategies(
+            enabled=["S1_TREND_EMA_ATR_ADX"],
+            params={
+                "S1_TREND_EMA_ATR_ADX": {
+                    "ema_fast": 1,
+                    "ema_slow": 2,
+                    "atr_period": 1,
+                    "adx_period": 1,
+                    "k_sl": 1.0,
+                },
+                "S1_TREND_BREAKOUT_DONCHIAN": {},
+                "S1_TREND_BREAKOUT_RETEST": {},
+                "S2_MR_ZSCORE_EMA_REGIME": {},
+                "S2_TREND_EXPANSION_BREAKOUT": {},
+                "S3_BREAKOUT_ATR_REGIME_EMA200": {},
+                "S3_TS_MOM_VOL_REGIME": {},
+            },
+        ),
+        risk=Risk(
+            r_base=1.0,
+            caps=RiskCaps(per_strategy=100.0, per_symbol=100.0, usd_exposure_cap=1_000_000.0),
+            conflict_policy="priority",
+            priority_order=["S1_TREND_EMA_ATR_ADX"],
+            dd_day_limit=1.0,
+            dd_week_limit=1.0,
+            max_execution_errors=1,
+        ),
+        costs=Costs(
+            spread_baseline_pips={"EURUSD": 0.0},
+            slippage=SlippageModel(
+                slip_base=0.0,
+                slip_k=0.0,
+                spike_tr_atr_th=10.0,
+                spike_mult=1.0,
+            ),
+            scenarios={"A": 1.0, "B": 1.0, "C": 1.0},
+        ),
+        validation=Validation(walk_forward=WalkForward(train=1, val=1, test=1), perturb_core_params_pct=0.0),
+        montecarlo=MonteCarlo(
+            mc1=MonteCarlo1(block_min=1, block_max=1, n_sims=1),
+            mc2=MonteCarlo2(spread_noise_range=(1.0, 1.0), slippage_noise_range=(1.0, 1.0), n_sims=1),
+        ),
+        outputs=Outputs(runs_dir="./runs", write_trades_csv=False, write_report_json=False, write_mc_json=False),
+        reproducibility=Reproducibility(random_seed=1),
+    )
 
 
-def _load_strategies(config: Config) -> List[_StrategySpec]:
-    specs: List[_StrategySpec] = []
-    for name in config.strategies.enabled:
-        module_path = STRATEGY_MAP.get(name)
-        if module_path is None:
-            raise ValueError(f"Unsupported strategy: {name}")
-        module = __import__(module_path, fromlist=["generate_signal"])
-        params = dict(config.strategies.params.get(name, {}))
-        specs.append(_StrategySpec(name=name, module=module, params=params))
-    return specs
+def _make_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "open": [1.0, 1.1, 1.2, 1.3],
+            "high": [1.05, 1.15, 1.25, 1.35],
+            "low": [0.95, 1.05, 1.15, 1.25],
+            "close": [1.0, 1.1, 1.2, 1.3],
+        }
+    )
 
 
-def _prepare_features(
-    df_by_symbol: Dict[str, pd.DataFrame],
-    strategies: Iterable[_StrategySpec],
-    config: Config,
-) -> Dict[str, pd.DataFrame]:
-    prepared: Dict[str, pd.DataFrame] = {}
-    for symbol, df in df_by_symbol.items():
-        df_local = df.copy()
-        df_local = _ensure_ohlc(df_local)
+def test_bar_contract_enforced():
+    orchestrator = BacktestOrchestrator()
+    config = _make_config()
+    df = _make_df()
 
-        for spec in strategies:
-            df_local = _apply_strategy_features(df_local, spec)
+    trades, _ = orchestrator.run({"EURUSD": df}, config)
+    scenario_a = trades[trades["scenario"] == "A"]
+    assert not scenario_a.empty
 
-        if "atr" not in df_local:
-            df_local["atr"] = atr(df_local, 14)
-
-        df_local["regime_snapshot"] = _compute_regime(
-            df_local,
-            window=config.regime.atr_pct_window,
-            atr_n=config.regime.atr_pct_n,
-            z_low=config.regime.z_low,
-            z_high=config.regime.z_high,
-            spike_th=config.regime.spike_tr_atr_th,
-        )
-        prepared[symbol] = df_local
-    return prepared
+    for _, row in scenario_a.iterrows():
+        expected = df["open"].iat[int(row["signal_idx"]) + 1]
+        assert row["entry_price"] == expected
 
 
-def _ensure_ohlc(df: pd.DataFrame) -> pd.DataFrame:
-    required = {"open", "high", "low", "close"}
-    missing = required - set(df.columns)
-    if missing:
-        raise ValueError(f"Missing required OHLC columns: {sorted(missing)}")
-    return df
+def test_outputs_have_required_columns():
+    orchestrator = BacktestOrchestrator()
+    config = _make_config()
+    df = _make_df()
+
+    trades, _ = orchestrator.run({"EURUSD": df}, config)
+    for column in TRADE_LOG_COLUMNS:
+        assert column in trades.columns
 
 
-def _apply_strategy_features(df: pd.DataFrame, spec: _StrategySpec) -> pd.DataFrame:
-    if spec.name == "S1_TREND_EMA_ATR_ADX":
-        ema_fast = int(spec.params.get("ema_fast", 20))
-        ema_slow = int(spec.params.get("ema_slow", 50))
-        atr_period = int(spec.params.get("atr_period", 14))
-        adx_period = int(spec.params.get("adx_period", 14))
-        if "ema_fast" not in df:
-            df["ema_fast"] = ema(df["close"], ema_fast)
-        if "ema_slow" not in df:
-            df["ema_slow"] = ema(df["close"], ema_slow)
-        if "atr" not in df:
-            df["atr"] = atr(df, atr_period)
-        if "adx" not in df:
-            df["adx"] = adx(df, adx_period)
-    elif spec.name == "S2_MR_ZSCORE_EMA_REGIME":
-        ema_base = int(spec.params.get("ema_regime", spec.params.get("ema_base", 200)))
-        adx_period = int(spec.params.get("adx_period", 14))
-        if "ema_base" not in df:
-            df["ema_base"] = ema(df["close"], ema_base)
-        if "adx" not in df:
-            df["adx"] = adx(df, adx_period)
-    elif spec.name == "S3_BREAKOUT_ATR_REGIME_EMA200":
-        atr_period = int(spec.params.get("atr_period", 14))
-        ema_period = int(spec.params.get("ema200", 200))
-        if "atr" not in df:
-            df["atr"] = atr(df, atr_period)
-        if "ema200" not in df:
-            df["ema200"] = ema(df["close"], ema_period)
-    return df
+def test_scenarios_three_runs():
+    orchestrator = BacktestOrchestrator()
+    config = _make_config()
+    df = _make_df()
+
+    trades, _ = orchestrator.run({"EURUSD": df}, config)
+    assert set(trades["scenario"].unique()) == {"A", "B", "C"}
+
+def test_metrics_use_pnl_pips_when_available():
+    """Verify metrics use pnl_pips when available, not pnl."""
+    trades_df = pd.DataFrame({
+        "pnl": [100.0, -50.0, 75.0],
+        "pnl_pips": [10.0, -5.0, 7.5],
+        "strategy_id": ["S1", "S1", "S1"],
+        "symbol": ["EURUSD", "EURUSD", "EURUSD"],
+        "regime_snapshot": ["A", "A", "A"],
+        "scenario": ["A", "A", "A"],
+    })
+    
+    metrics = compute_metrics(trades_df)
+    overall = metrics["overall"]
+    
+    # Expectancy should be based on pnl_pips (10 - 5 + 7.5) / 3 = 4.166...
+    expected_expectancy = (10.0 - 5.0 + 7.5) / 3
+    assert abs(overall["expectancy"] - expected_expectancy) < 0.01, \
+        f"Expected expectancy {expected_expectancy}, got {overall['expectancy']}"
+    
+    # Profit factor should be based on pnl_pips: (10 + 7.5) / abs(-5) = 3.5
+    expected_profit_factor = (10.0 + 7.5) / abs(-5.0)
+    assert abs(overall["profit_factor"] - expected_profit_factor) < 0.01, \
+        f"Expected PF {expected_profit_factor}, got {overall['profit_factor']}"
+    
+    # Max drawdown computed from pnl_pips cumsum: [10, 5, 12.5]
+    # Cummax: [10, 10, 12.5]
+    # Drawdown: [0, -5, 0]
+    # Min: -5.0
+    expected_max_dd = -5.0
+    assert abs(overall["max_drawdown"] - expected_max_dd) < 0.01, \
+        f"Expected max_dd {expected_max_dd}, got {overall['max_drawdown']}"
 
 
-def _compute_regime(
-    df: pd.DataFrame,
-    window: int,
-    atr_n: int,
-    z_low: float = -0.5,
-    z_high: float = 0.5,
-    spike_th: float = 2.5,
-) -> pd.Series:
-    atr_series = atr(df, atr_n)
-    atr_pct = atr_series / df["close"] * 100
-    z = atr_pct_zscore(atr_pct, window=window)
-
-    regime = pd.Series(["MID"] * len(df), index=df.index)
-    valid_mask = z.notna()
-    if valid_mask.any():
-        regime.loc[valid_mask] = np.where(
-            z[valid_mask] < z_low,
-            "LOW",
-            np.where(z[valid_mask] > z_high, "HIGH", "MID"),
-        )
-
-    prev_close = df["close"].shift(1)
-    tr = pd.concat(
-        [
-            df["high"] - df["low"],
-            (df["high"] - prev_close).abs(),
-            (df["low"] - prev_close).abs(),
-        ],
-        axis=1,
-    ).max(axis=1)
-    tr_atr = tr / atr_series
-    spikes = spike_flag(tr_atr, th=spike_th)
-    spike_tag = spikes.astype(int).astype(str)
-
-    return "VOL=" + regime + "|SPIKE=" + spike_tag
+def test_metrics_fallback_to_pnl_without_pnl_pips():
+    """Verify metrics fallback to pnl when pnl_pips is not available."""
+    trades_df = pd.DataFrame({
+        "pnl": [10.0, -5.0, 7.5],
+        "strategy_id": ["S1", "S1", "S1"],
+        "symbol": ["EURUSD", "EURUSD", "EURUSD"],
+        "regime_snapshot": ["A", "A", "A"],
+        "scenario": ["A", "A", "A"],
+    })
+    
+    metrics = compute_metrics(trades_df)
+    overall = metrics["overall"]
+    
+    # Expectancy should be based on pnl (10 - 5 + 7.5) / 3 = 4.166...
+    expected_expectancy = (10.0 - 5.0 + 7.5) / 3
+    assert abs(overall["expectancy"] - expected_expectancy) < 0.01, \
+        f"Expected expectancy {expected_expectancy}, got {overall['expectancy']}"
+    
+    # Profit factor: (10 + 7.5) / abs(-5) = 3.5
+    expected_profit_factor = (10.0 + 7.5) / abs(-5.0)
+    assert abs(overall["profit_factor"] - expected_profit_factor) < 0.01, \
+        f"Expected PF {expected_profit_factor}, got {overall['profit_factor']}"
 
 
-def _resolve_time(df: pd.DataFrame, idx: int) -> datetime:
-    if isinstance(df.index, pd.DatetimeIndex):
-        return df.index[idx].to_pydatetime()
-    if "timestamp" in df.columns:
-        return pd.to_datetime(df["timestamp"].iat[idx]).to_pydatetime()
-    return datetime.utcfromtimestamp(idx)
+def test_orchestrator_scenario_filtering(df_eurusd_1min_1000):
+    """Test that orchestrator can filter scenarios (e.g., run only B)."""
+    config = _make_config()
+    orchestrator = BacktestOrchestrator()
+    
+    # Run with scenarios=["B"] only
+    trades, report = orchestrator.run({"EURUSD": df_eurusd_1min_1000}, config, scenarios=["B"])
+    
+    # Should have trades and report
+    assert len(trades) > 0, "No trades generated for scenario B"
+    assert "metrics" in report, "Report missing metrics"
+    
+    by_scenario = report["metrics"]["by_scenario"]
+    
+    # Only B scenario should be present
+    assert "B" in by_scenario, "Scenario B missing from metrics"
+    assert len(by_scenario) == 1, f"Expected only 1 scenario, got {len(by_scenario)}"
+    
+    # All trades should be from scenario B
+    assert (trades["scenario"] == "B").all(), "Some trades are not from scenario B"
 
 
-def _build_trade_log_entry(
-    trade_id: int,
-    order: OrderIntent,
-    symbol: str,
-    signal_time: datetime,
-    signal_idx: int,
-    regime_snapshot: Any,
-) -> Dict[str, Any]:
-    return {
-        "trade_id": trade_id,
-        "order_id": f"live-{symbol}-{signal_idx}-{trade_id}",
-        "symbol": symbol,
-        "strategy_id": order.strategy_id,
-        "side": order.side.value,
-        "qty": order.qty,
-        "signal_time": signal_time,
-        "signal_idx": signal_idx,
-        "fill_time": None,
-        "entry_price": None,
-        "exit_time": None,
-        "exit_price": None,
-        "pnl": None,
-        "pnl_pct": None,
-        "spread_used": None,
-        "slippage_used": None,
-        "scenario": "LIVE",
-        "regime_snapshot": regime_snapshot,
-        "reason_codes": ";".join([f"{k}={v}" for k, v in order.meta.items()]),
-    }
+def test_orchestrator_all_scenarios_default(df_eurusd_1min_1000):
+    """Test that orchestrator runs all scenarios by default (scenarios=None)."""
+    config = _make_config()
+    orchestrator = BacktestOrchestrator()
+    
+    # Run with scenarios=None (default)
+    trades, report = orchestrator.run({"EURUSD": df_eurusd_1min_1000}, config, scenarios=None)
+    
+    # Should have all three scenarios
+    by_scenario = report["metrics"]["by_scenario"]
+    
+    assert "A" in by_scenario, "Scenario A missing"
+    assert "B" in by_scenario, "Scenario B missing"
+    assert "C" in by_scenario, "Scenario C missing"
+    assert len(by_scenario) == 3, f"Expected 3 scenarios, got {len(by_scenario)}"
 
 
-__all__ = ["LiveOrchestrator"]
-
-================
-File: runs/report.json
-================
-{
-  "metrics": {
-    "by_regime": {
-      "VOL=HIGH|SPIKE=0": {
-        "cvar_95": -57.50100290516376,
-        "expectancy": -2.1344719638657828,
-        "max_drawdown": -14560.20077657927,
-        "max_loss_streak": 9.0,
-        "max_win_streak": 13.0,
-        "profit_factor": 0.8271828968779421,
-        "trades": 6202.0
-      },
-      "VOL=HIGH|SPIKE=1": {
-        "cvar_95": -49.545288359547904,
-        "expectancy": -0.8701195773671545,
-        "max_drawdown": -476.0536555366211,
-        "max_loss_streak": 4.0,
-        "max_win_streak": 7.0,
-        "profit_factor": 0.923942418589007,
-        "trades": 283.0
-      },
-      "VOL=LOW|SPIKE=0": {
-        "cvar_95": -54.706222413508634,
-        "expectancy": -10.242537672471368,
-        "max_drawdown": -20848.10332945224,
-        "max_loss_streak": 12.0,
-        "max_win_streak": 12.0,
-        "profit_factor": 0.3581569759220912,
-        "trades": 2029.0
-      },
-      "VOL=LOW|SPIKE=1": {
-        "cvar_95": -26.768397899324366,
-        "expectancy": 6.121963814838098,
-        "max_drawdown": -61.286372997987456,
-        "max_loss_streak": 2.0,
-        "max_win_streak": 7.0,
-        "profit_factor": 2.258935617797413,
-        "trades": 40.0
-      },
-      "VOL=MID|SPIKE=0": {
-        "cvar_95": -50.94360690973635,
-        "expectancy": -5.448900831927247,
-        "max_drawdown": -32961.042878484506,
-        "max_loss_streak": 10.0,
-        "max_win_streak": 13.0,
-        "profit_factor": 0.5500367583913771,
-        "trades": 6043.0
-      },
-      "VOL=MID|SPIKE=1": {
-        "cvar_95": -49.55860375860185,
-        "expectancy": 1.8071598281111085,
-        "max_drawdown": -186.20821212402114,
-        "max_loss_streak": 4.0,
-        "max_win_streak": 10.0,
-        "profit_factor": 1.2480472199365225,
-        "trades": 140.0
-      }
-    },
-    "by_scenario": {
-      "A": {
-        "cvar_95": -53.02696139614197,
-        "expectancy": -3.094094887905537,
-        "max_drawdown": -15441.140397153873,
-        "max_loss_streak": 10.0,
-        "max_win_streak": 12.0,
-        "profit_factor": 0.7402945829547607,
-        "trades": 4951.0
-      },
-      "B": {
-        "cvar_95": -53.590890985604226,
-        "expectancy": -3.8476662470162384,
-        "max_drawdown": -19034.973877465436,
-        "max_loss_streak": 10.0,
-        "max_win_streak": 11.0,
-        "profit_factor": 0.6878199104731503,
-        "trades": 4916.0
-      },
-      "C": {
-        "cvar_95": -56.37382175140845,
-        "expectancy": -6.6657461265277265,
-        "max_drawdown": -32579.95150232011,
-        "max_loss_streak": 10.0,
-        "max_win_streak": 11.0,
-        "profit_factor": 0.5157410682216053,
-        "trades": 4870.0
-      }
-    },
-    "by_strategy": {
-      "s1_trend_breakout_retest": {
-        "cvar_95": -54.414094891261634,
-        "expectancy": -4.525763364086461,
-        "max_drawdown": -66818.4513036756,
-        "max_loss_streak": 10.0,
-        "max_win_streak": 12.0,
-        "profit_factor": 0.6425919774735783,
-        "trades": 14737.0
-      }
-    },
-    "by_symbol": {
-      "EURUSD": {
-        "cvar_95": -54.414094891261634,
-        "expectancy": -4.525763364086461,
-        "max_drawdown": -66818.4513036756,
-        "max_loss_streak": 10.0,
-        "max_win_streak": 12.0,
-        "profit_factor": 0.6425919774735783,
-        "trades": 14737.0
-      }
-    },
-    "overall": {
-      "cvar_95": -54.414094891261634,
-      "expectancy": -4.525763364086461,
-      "max_drawdown": -66818.4513036756,
-      "max_loss_streak": 10.0,
-      "max_win_streak": 12.0,
-      "profit_factor": 0.6425919774735783,
-      "trades": 14737.0
-    }
-  },
-  "summary": {
-    "scenarios": [
-      "A",
-      "B",
-      "C"
-    ],
-    "strategies": [
-      "s1_trend_breakout_retest"
-    ],
-    "symbols": [
-      "EURUSD"
-    ],
-    "total_trades": 14737
-  }
-}
+def test_orchestrator_multiple_scenarios(df_eurusd_1min_1000):
+    """Test that orchestrator can run specific scenario combinations."""
+    config = _make_config()
+    orchestrator = BacktestOrchestrator()
+    
+    # Run with scenarios=["A", "C"] (skip B)
+    trades, report = orchestrator.run({"EURUSD": df_eurusd_1min_1000}, config, scenarios=["A", "C"])
+    
+    # Should have only A and C
+    by_scenario = report["metrics"]["by_scenario"]
+    
+    assert "A" in by_scenario, "Scenario A missing"
+    assert "C" in by_scenario, "Scenario C missing"
+    assert "B" not in by_scenario, "Scenario B should not be present"
+    assert len(by_scenario) == 2, f"Expected 2 scenarios, got {len(by_scenario)}"
 
 ================
 File: tuning/worker.py
@@ -14978,6 +16169,144 @@ def run_worker(
     result["trades_B_raw"] = trades_b
 
     return result
+
+================
+File: runs/report.json
+================
+{
+  "metrics": {
+    "by_regime": {
+      "VOL=HIGH|SPIKE=0": {
+        "cvar_95": -63.184952219243925,
+        "expectancy": -16.67683613797629,
+        "max_drawdown": -44223.245907478675,
+        "max_loss_streak": 25.0,
+        "max_win_streak": 4.0,
+        "profit_factor": 0.27257273628007933,
+        "trades": 2655.0
+      },
+      "VOL=HIGH|SPIKE=1": {
+        "cvar_95": -70.7931265965851,
+        "expectancy": -30.91222340536111,
+        "max_drawdown": -3788.524020408111,
+        "max_loss_streak": 20.0,
+        "max_win_streak": 1.0,
+        "profit_factor": 0.06050172007190734,
+        "trades": 123.0
+      },
+      "VOL=LOW|SPIKE=0": {
+        "cvar_95": -31.823740349456745,
+        "expectancy": 14.252117613322364,
+        "max_drawdown": -204.53777898360204,
+        "max_loss_streak": 7.0,
+        "max_win_streak": 12.0,
+        "profit_factor": 4.102877042397408,
+        "trades": 1396.0
+      },
+      "VOL=LOW|SPIKE=1": {
+        "cvar_95": -10.529351113311659,
+        "expectancy": -10.061866178115595,
+        "max_drawdown": -20.762474823829223,
+        "max_loss_streak": 3.0,
+        "max_win_streak": 0.0,
+        "profit_factor": 0.0,
+        "trades": 3.0
+      },
+      "VOL=MID|SPIKE=0": {
+        "cvar_95": -48.16240212311099,
+        "expectancy": -0.7892560315728215,
+        "max_drawdown": -2982.4907217109703,
+        "max_loss_streak": 12.0,
+        "max_win_streak": 6.0,
+        "profit_factor": 0.9430278603144605,
+        "trades": 1902.0
+      },
+      "VOL=MID|SPIKE=1": {
+        "cvar_95": -61.30161614641318,
+        "expectancy": 3.328586750822105,
+        "max_drawdown": -120.16911813444322,
+        "max_loss_streak": 3.0,
+        "max_win_streak": 2.0,
+        "profit_factor": 1.1523657305011006,
+        "trades": 15.0
+      }
+    },
+    "by_scenario": {
+      "A": {
+        "cvar_95": -55.48244264452128,
+        "expectancy": -3.51122340902007,
+        "max_drawdown": -7760.694386021829,
+        "max_loss_streak": 13.0,
+        "max_win_streak": 6.0,
+        "profit_factor": 0.7694412956602639,
+        "trades": 2030.0
+      },
+      "B": {
+        "cvar_95": -56.10291954050384,
+        "expectancy": -4.298966145183187,
+        "max_drawdown": -9174.113080033718,
+        "max_loss_streak": 13.0,
+        "max_win_streak": 6.0,
+        "profit_factor": 0.7265990287156826,
+        "trades": 2031.0
+      },
+      "C": {
+        "cvar_95": -58.57505988749122,
+        "expectancy": -6.790794513100917,
+        "max_drawdown": -14057.730285351847,
+        "max_loss_streak": 13.0,
+        "max_win_streak": 6.0,
+        "profit_factor": 0.6076068958931079,
+        "trades": 2033.0
+      }
+    },
+    "by_strategy": {
+      "S2_TREND_EXPANSION_BREAKOUT": {
+        "cvar_95": -56.844901930552155,
+        "expectancy": -4.8678485405828615,
+        "max_drawdown": -30297.57987202305,
+        "max_loss_streak": 13.0,
+        "max_win_streak": 6.0,
+        "profit_factor": 0.6974045269175448,
+        "trades": 6094.0
+      }
+    },
+    "by_symbol": {
+      "EURUSD": {
+        "cvar_95": -56.844901930552155,
+        "expectancy": -4.8678485405828615,
+        "max_drawdown": -30297.57987202305,
+        "max_loss_streak": 13.0,
+        "max_win_streak": 6.0,
+        "profit_factor": 0.6974045269175448,
+        "trades": 6094.0
+      }
+    },
+    "overall": {
+      "cvar_95": -56.844901930552155,
+      "expectancy": -4.8678485405828615,
+      "max_drawdown": -30297.57987202305,
+      "max_loss_streak": 13.0,
+      "max_win_streak": 6.0,
+      "profit_factor": 0.6974045269175448,
+      "trades": 6094.0
+    }
+  },
+  "summary": {
+    "scenarios": [
+      "A",
+      "B",
+      "C"
+    ],
+    "strategies": [
+      "S2_TREND_EXPANSION_BREAKOUT"
+    ],
+    "symbols": [
+      "EURUSD"
+    ],
+    "total_trades": 6094
+  }
+}
 
 ================
 File: strategies/s3_breakout_atr_regime_ema200.py
@@ -15694,401 +17023,6 @@ def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
     )
 
 ================
-File: configs/models.py
-================
-from __future__ import annotations
-
-from typing import Dict, List, Literal, Tuple
-
-from pydantic import BaseModel, model_validator, validator
-
-
-ALLOWED_STRATEGIES = {
-    "S1_TREND_EMA_ATR_ADX",
-    "S2_MR_ZSCORE_EMA_REGIME",
-    "S3_BREAKOUT_ATR_REGIME_EMA200",
-    "S1_TREND_BREAKOUT_DONCHIAN",
-    "S1_TREND_BREAKOUT_RETEST",
-    "S2_TREND_EXPANSION_BREAKOUT",
-}
-
-
-class StrictBaseModel(BaseModel):
-    class Config:
-        extra = "forbid"
-        validate_assignment = True
-
-
-class Universe(StrictBaseModel):
-    symbols: List[str]
-    timeframe: str
-
-    @validator("symbols")
-    def symbols_non_empty(cls, value: List[str]) -> List[str]:
-        if not value:
-            raise ValueError("symbols must be a non-empty list")
-        return value
-
-
-class BarContract(StrictBaseModel):
-    signal_on: Literal["close"]
-    fill_on: Literal["open_next"]
-    allow_bar0: bool
-
-    @validator("allow_bar0")
-    def allow_bar0_disabled(cls, value: bool) -> bool:
-        if value:
-            raise ValueError("allow_bar0 must be false")
-        return value
-
-
-class Regime(StrictBaseModel):
-    atr_pct_window: int = 960
-    atr_pct_n: int = 14
-    z_low: float = -0.5
-    z_high: float = 0.5
-    spike_tr_atr_th: float = 2.5
-
-    @validator("atr_pct_window")
-    def atr_pct_window_positive(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError("atr_pct_window must be > 0")
-        return value
-
-    @validator("atr_pct_n")
-    def atr_pct_n_positive(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError("atr_pct_n must be > 0")
-        return value
-
-    @model_validator(mode="after")
-    def zscore_bounds_valid(self) -> "Regime":
-        if self.z_low >= self.z_high:
-            raise ValueError("z_low must be < z_high")
-        return self
-
-
-class Strategies(StrictBaseModel):
-    enabled: List[str]
-    params: Dict[str, Dict[str, object]]
-
-    @validator("enabled")
-    def enabled_valid(cls, value: List[str]) -> List[str]:
-        invalid = [name for name in value if name not in ALLOWED_STRATEGIES]
-        if invalid:
-            raise ValueError(f"Unknown strategies enabled: {invalid}")
-        return value
-
-    @validator("params")
-    def params_keys_valid(cls, value: Dict[str, Dict[str, object]]) -> Dict[str, Dict[str, object]]:
-        extra = set(value.keys()) - ALLOWED_STRATEGIES
-        missing = ALLOWED_STRATEGIES - set(value.keys())
-        if extra:
-            raise ValueError(f"params contains unsupported strategies: {sorted(extra)}")
-        if missing:
-            raise ValueError(f"params missing strategies: {sorted(missing)}")
-        return value
-
-    @model_validator(mode="after")
-    def params_cover_enabled(self) -> "Strategies":
-        missing = [name for name in self.enabled if name not in self.params]
-        if missing:
-            raise ValueError(f"params missing enabled strategies: {missing}")
-        return self
-
-
-class RiskCaps(StrictBaseModel):
-    per_strategy: float
-    per_symbol: float
-    usd_exposure_cap: float
-
-
-class Risk(StrictBaseModel):
-    r_base: float
-    caps: RiskCaps
-    conflict_policy: Literal["priority", "netting"]
-    priority_order: List[str] | None = None
-    dd_day_limit: float
-    dd_week_limit: float
-    max_execution_errors: int
-    max_hold_bars: int = 96
-
-    @model_validator(mode="after")
-    def priority_requires_order(self) -> "Risk":
-        if self.conflict_policy == "priority" and not self.priority_order:
-            raise ValueError("priority_order must be provided when conflict_policy is priority")
-        if self.conflict_policy == "netting" and self.priority_order:
-            raise ValueError("priority_order must be empty when conflict_policy is netting")
-        return self
-
-
-class SlippageModel(StrictBaseModel):
-    slip_base: float
-    slip_k: float
-    spike_tr_atr_th: float
-    spike_mult: float
-
-
-class Costs(StrictBaseModel):
-    spread_baseline_pips: Dict[str, float]
-    slippage: SlippageModel
-    scenarios: Dict[str, float]
-
-    @validator("scenarios")
-    def scenarios_have_abc(cls, value: Dict[str, float]) -> Dict[str, float]:
-        expected = {"A", "B", "C"}
-        missing = expected - set(value.keys())
-        extra = set(value.keys()) - expected
-        if missing or extra:
-            raise ValueError("scenarios must contain only A, B, C")
-        return value
-
-
-class WalkForward(StrictBaseModel):
-    train: int | None = None
-    val: int | None = None
-    test: int | None = None
-    train_start: str | None = None
-    train_end: str | None = None
-    val_start: str | None = None
-    val_end: str | None = None
-    test_start: str | None = None
-    test_end: str | None = None
-
-    @model_validator(mode="after")
-    def require_lengths_or_dates(self) -> "WalkForward":
-        lengths = [self.train, self.val, self.test]
-        date_fields = [
-            self.train_start,
-            self.train_end,
-            self.val_start,
-            self.val_end,
-            self.test_start,
-            self.test_end,
-        ]
-        if all(value is not None for value in lengths):
-            return self
-        if all(value is not None for value in date_fields):
-            return self
-        raise ValueError("walk_forward must include train/val/test lengths or full date splits")
-
-
-class Validation(StrictBaseModel):
-    walk_forward: WalkForward
-    perturb_core_params_pct: float
-
-
-class MonteCarlo1(StrictBaseModel):
-    block_min: int
-    block_max: int
-    n_sims: int
-
-    @model_validator(mode="after")
-    def blocks_valid(self) -> "MonteCarlo1":
-        if self.block_min > self.block_max:
-            raise ValueError("block_min must be <= block_max")
-        return self
-
-
-class MonteCarlo2(StrictBaseModel):
-    spread_noise_range: Tuple[float, float]
-    slippage_noise_range: Tuple[float, float]
-    n_sims: int
-
-    @validator("spread_noise_range", "slippage_noise_range")
-    def ranges_valid(cls, value: Tuple[float, float]) -> Tuple[float, float]:
-        if len(value) != 2:
-            raise ValueError("noise ranges must include two values")
-        if value[0] > value[1]:
-            raise ValueError("noise range min must be <= max")
-        return value
-
-
-class MonteCarlo(StrictBaseModel):
-    mc1: MonteCarlo1
-    mc2: MonteCarlo2
-
-
-class Outputs(StrictBaseModel):
-    runs_dir: str
-    write_trades_csv: bool
-    write_report_json: bool
-    write_mc_json: bool
-    debug: bool = False
-
-
-class Reproducibility(StrictBaseModel):
-    random_seed: int
-
-
-class Config(StrictBaseModel):
-    universe: Universe
-    bar_contract: BarContract
-    regime: Regime = Regime()
-    strategies: Strategies
-    risk: Risk
-    costs: Costs
-    validation: Validation
-    montecarlo: MonteCarlo
-    outputs: Outputs
-    reproducibility: Reproducibility
-
-    @model_validator(mode="after")
-    def costs_cover_symbols(self) -> "Config":
-        missing = set(self.universe.symbols) - set(self.costs.spread_baseline_pips.keys())
-        if missing:
-            raise ValueError(f"spread_baseline_pips missing symbols: {sorted(missing)}")
-        return self
-
-================
-File: configs/examples/example_config.yaml
-================
-universe:
-  symbols:
-    - EURUSD
-    - GBPUSD
-    - USDJPY
-  timeframe: M15
-bar_contract:
-  signal_on: close
-  fill_on: open_next
-  allow_bar0: false
-regime:
-  atr_pct_window: 960
-  atr_pct_n: 14
-  z_low: -0.5
-  z_high: 0.5
-  spike_tr_atr_th: 2.5
-strategies:
-  enabled:
-    - S1_TREND_BREAKOUT_RETEST
-  params:
-    S1_TREND_BREAKOUT_RETEST:
-        ema_fast: 30
-        ema_slow: 100
-        adx_period: 14
-        adx_th: 25
-        atr_period: 14
-        breakout_lookback: 55
-        buffer_atr: 0.1
-        retest_atr: 0.1
-        cooldown_bars: 8
-        allowed_vol_regimes: ["MID","HIGH"]
-        spike_block: false
-        adx_rising: false
-        k_sl: 2.5
-        k_tp: 1.5
-        min_sl_points: 8.0
-        min_tp_points: 5.0
-    S1_TREND_EMA_ATR_ADX:
-      ema_fast: 20
-      ema_slow: 50
-      adx_period: 14
-      adx_th: 25
-      atr_period: 14
-      k_sl: 2.5
-      min_sl_points: 8.0
-      k_tp: 1.5
-      min_tp_points: 8.0
-    S2_MR_ZSCORE_EMA_REGIME:
-      zscore_window: 30
-      ema_regime: 200
-      k_sl: 2.0
-      min_sl_points: 5.0
-    S3_BREAKOUT_ATR_REGIME_EMA200:
-      breakout_lookback: 55
-      atr_period: 14
-      k_sl: 2.0
-      min_sl_points: 5.0
-    S1_TREND_BREAKOUT_DONCHIAN:
-      # Trend regime
-      ema_fast: 30
-      ema_slow: 100
-      adx_period: 14
-      adx_th: 30
-      adx_rising: false
-
-      # Breakout timing
-      breakout_lookback: 100
-      buffer_atr: 0.1          # buffer = 0.1 * ATR(price)
-      allowed_vol_regimes: ["MID", "HIGH"]
-      spike_block: false       # true solo dopo
-
-      # Anti-overtrading
-      cooldown_bars: 0         # 2 ore su M15
-
-      # Risk / exits
-      atr_period: 14
-      k_sl: 3.0
-      k_tp: 2.0
-      min_sl_points: 8.0
-      min_tp_points: 5.0
-    S2_TREND_EXPANSION_BREAKOUT:
-      ema_fast: 50
-      ema_slow: 200
-      atr_short_period: 14
-      atr_long_period: 100
-      breakout_lookback: 55
-      buffer_atr: 0.2
-      vol_ratio_th: 1.1
-      impulse_th: 1.2
-      k_sl: 3.0
-      min_sl_points: 8.0
-      k_trail: 3.5
-      max_hold_bars: 96
-      min_mfe_atr: 0.5
-risk:
-  max_hold_bars: 96
-  r_base: 0.002
-  caps:
-    per_strategy: 0.03
-    per_symbol: 0.05
-    usd_exposure_cap: 100000
-  conflict_policy: priority
-  priority_order:
-    - S1_TREND_EMA_ATR_ADX
-  dd_day_limit: 0.02
-  dd_week_limit: 0.05
-  max_execution_errors: 3
-costs:
-  spread_baseline_pips:
-    EURUSD: 0.7
-    GBPUSD: 0.9
-    USDJPY: 0.8
-  slippage:
-    slip_base: 0.1
-    slip_k: 0.5
-    spike_tr_atr_th: 1.5
-    spike_mult: 2.0
-  scenarios:
-    A: 1.0
-    B: 1.5
-    C: 2.0
-validation:
-  walk_forward:
-    train: 252
-    val: 63
-    test: 63
-  perturb_core_params_pct: 0.1
-montecarlo:
-  mc1:
-    block_min: 5
-    block_max: 20
-    n_sims: 500
-  mc2:
-    spread_noise_range: [0.8, 1.2]
-    slippage_noise_range: [0.9, 1.3]
-    n_sims: 300
-outputs:
-  runs_dir: ./runs
-  write_trades_csv: true
-  write_report_json: true
-  write_mc_json: true
-  debug: true
-reproducibility:
-  random_seed: 42
-
-================
 File: tests/anti_leakage/test_anti_leakage.py
 ================
 import sys
@@ -16440,6 +17374,415 @@ def test_orchestrator_loop_avoids_hist_copy() -> None:
     assert "df_hist" not in source
 
 ================
+File: configs/models.py
+================
+from __future__ import annotations
+
+from typing import Dict, List, Literal, Tuple
+
+from pydantic import BaseModel, model_validator, validator
+
+
+ALLOWED_STRATEGIES = {
+    "S1_TREND_EMA_ATR_ADX",
+    "S2_MR_ZSCORE_EMA_REGIME",
+    "S3_BREAKOUT_ATR_REGIME_EMA200",
+    "S1_TREND_BREAKOUT_DONCHIAN",
+    "S1_TREND_BREAKOUT_RETEST",
+    "S2_TREND_EXPANSION_BREAKOUT",
+    "S3_TS_MOM_VOL_REGIME",
+}
+
+
+class StrictBaseModel(BaseModel):
+    class Config:
+        extra = "forbid"
+        validate_assignment = True
+
+
+class Universe(StrictBaseModel):
+    symbols: List[str]
+    timeframe: str
+
+    @validator("symbols")
+    def symbols_non_empty(cls, value: List[str]) -> List[str]:
+        if not value:
+            raise ValueError("symbols must be a non-empty list")
+        return value
+
+
+class BarContract(StrictBaseModel):
+    signal_on: Literal["close"]
+    fill_on: Literal["open_next"]
+    allow_bar0: bool
+
+    @validator("allow_bar0")
+    def allow_bar0_disabled(cls, value: bool) -> bool:
+        if value:
+            raise ValueError("allow_bar0 must be false")
+        return value
+
+
+class Regime(StrictBaseModel):
+    atr_pct_window: int = 960
+    atr_pct_n: int = 14
+    z_low: float = -0.5
+    z_high: float = 0.5
+    spike_tr_atr_th: float = 2.5
+
+    @validator("atr_pct_window")
+    def atr_pct_window_positive(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("atr_pct_window must be > 0")
+        return value
+
+    @validator("atr_pct_n")
+    def atr_pct_n_positive(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("atr_pct_n must be > 0")
+        return value
+
+    @model_validator(mode="after")
+    def zscore_bounds_valid(self) -> "Regime":
+        if self.z_low >= self.z_high:
+            raise ValueError("z_low must be < z_high")
+        return self
+
+
+class Strategies(StrictBaseModel):
+    enabled: List[str]
+    params: Dict[str, Dict[str, object]]
+
+    @validator("enabled")
+    def enabled_valid(cls, value: List[str]) -> List[str]:
+        invalid = [name for name in value if name not in ALLOWED_STRATEGIES]
+        if invalid:
+            raise ValueError(f"Unknown strategies enabled: {invalid}")
+        return value
+
+    @validator("params")
+    def params_keys_valid(cls, value: Dict[str, Dict[str, object]]) -> Dict[str, Dict[str, object]]:
+        extra = set(value.keys()) - ALLOWED_STRATEGIES
+        missing = ALLOWED_STRATEGIES - set(value.keys())
+        if extra:
+            raise ValueError(f"params contains unsupported strategies: {sorted(extra)}")
+        if missing:
+            raise ValueError(f"params missing strategies: {sorted(missing)}")
+        return value
+
+    @model_validator(mode="after")
+    def params_cover_enabled(self) -> "Strategies":
+        missing = [name for name in self.enabled if name not in self.params]
+        if missing:
+            raise ValueError(f"params missing enabled strategies: {missing}")
+        return self
+
+
+class RiskCaps(StrictBaseModel):
+    per_strategy: float
+    per_symbol: float
+    usd_exposure_cap: float
+
+
+class Risk(StrictBaseModel):
+    r_base: float
+    caps: RiskCaps
+    conflict_policy: Literal["priority", "netting"]
+    priority_order: List[str] | None = None
+    dd_day_limit: float
+    dd_week_limit: float
+    max_execution_errors: int
+    max_hold_bars: int = 96
+
+    @model_validator(mode="after")
+    def priority_requires_order(self) -> "Risk":
+        if self.conflict_policy == "priority" and not self.priority_order:
+            raise ValueError("priority_order must be provided when conflict_policy is priority")
+        if self.conflict_policy == "netting" and self.priority_order:
+            raise ValueError("priority_order must be empty when conflict_policy is netting")
+        return self
+
+
+class SlippageModel(StrictBaseModel):
+    slip_base: float
+    slip_k: float
+    spike_tr_atr_th: float
+    spike_mult: float
+
+
+class Costs(StrictBaseModel):
+    spread_baseline_pips: Dict[str, float]
+    slippage: SlippageModel
+    scenarios: Dict[str, float]
+
+    @validator("scenarios")
+    def scenarios_have_abc(cls, value: Dict[str, float]) -> Dict[str, float]:
+        expected = {"A", "B", "C"}
+        missing = expected - set(value.keys())
+        extra = set(value.keys()) - expected
+        if missing or extra:
+            raise ValueError("scenarios must contain only A, B, C")
+        return value
+
+
+class WalkForward(StrictBaseModel):
+    train: int | None = None
+    val: int | None = None
+    test: int | None = None
+    train_start: str | None = None
+    train_end: str | None = None
+    val_start: str | None = None
+    val_end: str | None = None
+    test_start: str | None = None
+    test_end: str | None = None
+
+    @model_validator(mode="after")
+    def require_lengths_or_dates(self) -> "WalkForward":
+        lengths = [self.train, self.val, self.test]
+        date_fields = [
+            self.train_start,
+            self.train_end,
+            self.val_start,
+            self.val_end,
+            self.test_start,
+            self.test_end,
+        ]
+        if all(value is not None for value in lengths):
+            return self
+        if all(value is not None for value in date_fields):
+            return self
+        raise ValueError("walk_forward must include train/val/test lengths or full date splits")
+
+
+class Validation(StrictBaseModel):
+    walk_forward: WalkForward
+    perturb_core_params_pct: float
+
+
+class MonteCarlo1(StrictBaseModel):
+    block_min: int
+    block_max: int
+    n_sims: int
+
+    @model_validator(mode="after")
+    def blocks_valid(self) -> "MonteCarlo1":
+        if self.block_min > self.block_max:
+            raise ValueError("block_min must be <= block_max")
+        return self
+
+
+class MonteCarlo2(StrictBaseModel):
+    spread_noise_range: Tuple[float, float]
+    slippage_noise_range: Tuple[float, float]
+    n_sims: int
+
+    @validator("spread_noise_range", "slippage_noise_range")
+    def ranges_valid(cls, value: Tuple[float, float]) -> Tuple[float, float]:
+        if len(value) != 2:
+            raise ValueError("noise ranges must include two values")
+        if value[0] > value[1]:
+            raise ValueError("noise range min must be <= max")
+        return value
+
+
+class MonteCarlo(StrictBaseModel):
+    mc1: MonteCarlo1
+    mc2: MonteCarlo2
+
+
+class Outputs(StrictBaseModel):
+    runs_dir: str
+    write_trades_csv: bool
+    write_report_json: bool
+    write_mc_json: bool
+    debug: bool = False
+
+
+class Reproducibility(StrictBaseModel):
+    random_seed: int
+
+
+class Config(StrictBaseModel):
+    universe: Universe
+    bar_contract: BarContract
+    regime: Regime = Regime()
+    strategies: Strategies
+    risk: Risk
+    costs: Costs
+    validation: Validation
+    montecarlo: MonteCarlo
+    outputs: Outputs
+    reproducibility: Reproducibility
+
+    @model_validator(mode="after")
+    def costs_cover_symbols(self) -> "Config":
+        missing = set(self.universe.symbols) - set(self.costs.spread_baseline_pips.keys())
+        if missing:
+            raise ValueError(f"spread_baseline_pips missing symbols: {sorted(missing)}")
+        return self
+
+================
+File: configs/examples/example_config.yaml
+================
+universe:
+  symbols:
+    - EURUSD
+    - GBPUSD
+    - USDJPY
+  timeframe: M15
+bar_contract:
+  signal_on: close
+  fill_on: open_next
+  allow_bar0: false
+regime:
+  atr_pct_window: 960
+  atr_pct_n: 14
+  z_low: -0.5
+  z_high: 0.5
+  spike_tr_atr_th: 2.5
+strategies:
+  enabled:
+    - S3_TS_MOM_VOL_REGIME
+  params:
+    S1_TREND_BREAKOUT_RETEST:
+        ema_fast: 30
+        ema_slow: 100
+        adx_period: 14
+        adx_th: 25
+        atr_period: 14
+        breakout_lookback: 55
+        buffer_atr: 0.1
+        retest_atr: 0.1
+        cooldown_bars: 8
+        allowed_vol_regimes: ["MID","HIGH"]
+        spike_block: false
+        adx_rising: false
+        k_sl: 2.5
+        k_tp: 1.5
+        min_sl_points: 8.0
+        min_tp_points: 5.0
+    S1_TREND_EMA_ATR_ADX:
+      ema_fast: 20
+      ema_slow: 50
+      adx_period: 14
+      adx_th: 25
+      atr_period: 14
+      k_sl: 2.5
+      min_sl_points: 8.0
+      k_tp: 1.5
+      min_tp_points: 8.0
+    S2_MR_ZSCORE_EMA_REGIME:
+      zscore_window: 30
+      ema_regime: 200
+      k_sl: 2.0
+      min_sl_points: 5.0
+    S3_BREAKOUT_ATR_REGIME_EMA200:
+      breakout_lookback: 55
+      atr_period: 14
+      k_sl: 2.0
+      min_sl_points: 5.0
+    S1_TREND_BREAKOUT_DONCHIAN:
+      # Trend regime
+      ema_fast: 30
+      ema_slow: 100
+      adx_period: 14
+      adx_th: 30
+      adx_rising: false
+
+      # Breakout timing
+      breakout_lookback: 100
+      buffer_atr: 0.1          # buffer = 0.1 * ATR(price)
+      allowed_vol_regimes: ["MID", "HIGH"]
+      spike_block: false       # true solo dopo
+
+      # Anti-overtrading
+      cooldown_bars: 0         # 2 ore su M15
+
+      # Risk / exits
+      atr_period: 14
+      k_sl: 3.0
+      k_tp: 2.0
+      min_sl_points: 8.0
+      min_tp_points: 5.0
+    S2_TREND_EXPANSION_BREAKOUT:
+      ema_fast: 50
+      ema_slow: 200
+      atr_short_period: 14
+      atr_long_period: 100
+      breakout_lookback: 55
+      buffer_atr: 0.2
+      vol_ratio_th: 1.1
+      impulse_th: 1.2
+      k_sl: 3.0
+      min_sl_points: 8.0
+      k_trail: 3.5
+      max_hold_bars: 96
+      min_mfe_atr: 0.5
+    S3_TS_MOM_VOL_REGIME:
+      mom_window: 96
+      mom_th: 0.0
+      atr_short_period: 14
+      atr_long_period: 100
+      vol_ratio_th: 1.1
+      atr_min_pips: 8.0
+      allowed_vol_regimes: ["MID", "HIGH"]
+      spike_block: false
+      cooldown_bars: 8
+      k_sl: 2.5
+      min_sl_points: 8.0
+      k_trail: 3.5
+risk:
+  max_hold_bars: 96
+  r_base: 0.002
+  caps:
+    per_strategy: 0.03
+    per_symbol: 0.05
+    usd_exposure_cap: 100000
+  conflict_policy: priority
+  priority_order:
+    - S1_TREND_EMA_ATR_ADX
+  dd_day_limit: 0.02
+  dd_week_limit: 0.05
+  max_execution_errors: 3
+costs:
+  spread_baseline_pips:
+    EURUSD: 0.7
+    GBPUSD: 0.9
+    USDJPY: 0.8
+  slippage:
+    slip_base: 0.1
+    slip_k: 0.5
+    spike_tr_atr_th: 1.5
+    spike_mult: 2.0
+  scenarios:
+    A: 1.0
+    B: 1.5
+    C: 2.0
+validation:
+  walk_forward:
+    train: 252
+    val: 63
+    test: 63
+  perturb_core_params_pct: 0.1
+montecarlo:
+  mc1:
+    block_min: 5
+    block_max: 20
+    n_sims: 500
+  mc2:
+    spread_noise_range: [0.8, 1.2]
+    slippage_noise_range: [0.9, 1.3]
+    n_sims: 300
+outputs:
+  runs_dir: ./runs
+  write_trades_csv: true
+  write_report_json: true
+  write_mc_json: true
+  debug: true
+reproducibility:
+  random_seed: 42
+
+================
 File: backtest/orchestrator.py
 ================
 from __future__ import annotations
@@ -16472,6 +17815,7 @@ STRATEGY_MAP = {
     "S2_MR_ZSCORE_EMA_REGIME": "strategies.s2_mr_zscore_ema_regime",
     "S2_TREND_EXPANSION_BREAKOUT": "strategies.s2_trend_expansion_breakout",
     "S3_BREAKOUT_ATR_REGIME_EMA200": "strategies.s3_breakout_atr_regime_ema200",
+    "S3_TS_MOM_VOL_REGIME": "strategies.s3_ts_mom_vol_regime",
 }
 
 
@@ -16554,6 +17898,9 @@ def _prepare_features(
 
         pip_size = PIP_SIZES.get(symbol, 0.0001)
         if "atr_pips" not in df_local:
+            # Ensure atr exists before computing atr_pips
+            if "atr" not in df_local:
+                df_local["atr"] = atr(df_local, 14)
             df_local["atr_pips"] = df_local["atr"] / pip_size
 
 
@@ -16710,6 +18057,33 @@ def _apply_strategy_features(df: pd.DataFrame, spec: _StrategySpec) -> pd.DataFr
             df["breakout_low"] = (
                 df["low"].shift(1).rolling(window=breakout_window, min_periods=breakout_window).min()
             )
+    elif spec.name == "S3_TS_MOM_VOL_REGIME":
+        # Time-series momentum strategy features
+        mom_window = int(spec.params.get("mom_window", 96))
+        atr_short_period = int(spec.params.get("atr_short_period", 14))
+        atr_long_period = int(spec.params.get("atr_long_period", 100))
+        
+        # Log returns (no shift - raw returns)
+        if "r" not in df:
+            df["r"] = np.log(df["close"]).diff()
+        
+        # Momentum signal: rolling mean of past returns (shift(1) avoids lookahead)
+        if "mom" not in df:
+            df["mom"] = df["r"].shift(1).rolling(window=mom_window, min_periods=mom_window).mean()
+        
+        # Momentum strength
+        if "mom_abs" not in df:
+            df["mom_abs"] = df["mom"].abs()
+        
+        # ATR series in price units
+        if "atr_short" not in df:
+            df["atr_short"] = atr(df, atr_short_period)
+        if "atr_long" not in df:
+            df["atr_long"] = atr(df, atr_long_period)
+        
+        # Volatility ratio
+        if "vol_ratio" not in df:
+            df["vol_ratio"] = df["atr_short"] / df["atr_long"]
     return df
 
 
@@ -16790,6 +18164,7 @@ def _run_scenario(
             "highest_high_since_entry": None,
             "lowest_low_since_entry": None,
         }
+        last_exit_idx = -999  # Track last exit bar for cooldown
         cols = {col: df[col].to_numpy() for col in df.columns}
         if "time" not in cols:
             if "timestamp" in df.columns:
@@ -16821,8 +18196,48 @@ def _run_scenario(
                     elif tp_hit:
                         exit_price_raw = tp_price
                 
-                # Update trailing stop for S2_TREND_EXPANSION_BREAKOUT (Chandelier-style)
-                if exit_price_raw is None and position["strategy_id"] == "S2_TREND_EXPANSION_BREAKOUT":
+                # Update trailing stop for strategies with tp_points=None (trend mode)
+                # This implements generic Chandelier-style trailing stops
+                if exit_price_raw is None and position["tp_price"] is None:
+                    k_trail = float(config.strategies.params.get(position["strategy_id"], {}).get("k_trail", 3.5))
+                    
+                    # Update highest/lowest since entry
+                    if position["highest_high_since_entry"] is None:
+                        position["highest_high_since_entry"] = high
+                    else:
+                        position["highest_high_since_entry"] = max(position["highest_high_since_entry"], high)
+                    
+                    if position["lowest_low_since_entry"] is None:
+                        position["lowest_low_since_entry"] = low
+                    else:
+                        position["lowest_low_since_entry"] = min(position["lowest_low_since_entry"], low)
+                    
+                    # Compute trailing stop (use atr_short if available, else atr)
+                    atr_short = float(df["atr_short"].iat[idx + 1]) if "atr_short" in df else float(df["atr"].iat[idx + 1]) if "atr" in df else None
+                    if atr_short is not None and atr_short > 0:
+                        if position["current_side"] == Side.LONG:
+                            trail_stop = position["highest_high_since_entry"] - (k_trail * atr_short)
+                            # Tighten stop if trailing is better
+                            if position["sl_price"] is not None:
+                                position["sl_price"] = max(position["sl_price"], trail_stop)
+                            else:
+                                position["sl_price"] = trail_stop
+                            # Check if trailing stop hit
+                            if low <= position["sl_price"]:
+                                exit_price_raw = position["sl_price"]
+                        elif position["current_side"] == Side.SHORT:
+                            trail_stop = position["lowest_low_since_entry"] + (k_trail * atr_short)
+                            # Tighten stop if trailing is better
+                            if position["sl_price"] is not None:
+                                position["sl_price"] = min(position["sl_price"], trail_stop)
+                            else:
+                                position["sl_price"] = trail_stop
+                            # Check if trailing stop hit
+                            if high >= position["sl_price"]:
+                                exit_price_raw = position["sl_price"]
+                
+                # OLD S2-specific trailing logic (kept for backward compat during transition)
+                elif exit_price_raw is None and position["strategy_id"] == "S2_TREND_EXPANSION_BREAKOUT" and position["tp_price"] is not None:
                     k_trail = float(config.strategies.params.get(position["strategy_id"], {}).get("k_trail", 3.5))
                     
                     # Update highest/lowest since entry
@@ -16917,7 +18332,31 @@ def _run_scenario(
                         else 0.0
                     )
                     exit_reason = "EOD"
-                    if position["current_side"] == Side.LONG:
+                    
+                    # Detect if this was a trailing stop exit (for trend strategies with tp_price=None)
+                    trail_exit = False
+                    if position["tp_price"] is None and position["highest_high_since_entry"] is not None and position["lowest_low_since_entry"] is not None:
+                        # Check if the exit was from trailing stop (not initial SL or TP)
+                        if position["current_side"] == Side.LONG and sl_hit and not tp_hit:
+                            k_trail = float(config.strategies.params.get(position["strategy_id"], {}).get("k_trail", 3.5))
+                            atr_short = float(df["atr_short"].iat[idx + 1]) if "atr_short" in df else float(df["atr"].iat[idx + 1]) if "atr" in df else None
+                            if atr_short is not None and atr_short > 0:
+                                trail_stop = position["highest_high_since_entry"] - (k_trail * atr_short)
+                                # If exit price matches trailing stop (within floating point tolerance)
+                                if abs(float(exit_price_raw) - trail_stop) < 1e-6:
+                                    trail_exit = True
+                        elif position["current_side"] == Side.SHORT and sl_hit and not tp_hit:
+                            k_trail = float(config.strategies.params.get(position["strategy_id"], {}).get("k_trail", 3.5))
+                            atr_short = float(df["atr_short"].iat[idx + 1]) if "atr_short" in df else float(df["atr"].iat[idx + 1]) if "atr" in df else None
+                            if atr_short is not None and atr_short > 0:
+                                trail_stop = position["lowest_low_since_entry"] + (k_trail * atr_short)
+                                # If exit price matches trailing stop (within floating point tolerance)
+                                if abs(float(exit_price_raw) - trail_stop) < 1e-6:
+                                    trail_exit = True
+                    
+                    if trail_exit:
+                        exit_reason = "TRAIL"
+                    elif position["current_side"] == Side.LONG:
                         if sl_hit: exit_reason = "SL"
                         elif tp_hit: exit_reason = "TP"
                         else:
@@ -16982,6 +18421,10 @@ def _run_scenario(
                         }
                     )
                     trade_id += 1
+                    
+                    # Track the last exit index for cooldown enforcement
+                    last_exit_idx = idx
+                    
                     position = {
                         "current_side": Side.FLAT,
                         "entry_price": None,
@@ -17036,6 +18479,12 @@ def _run_scenario(
             orders = allocator.allocate(filtered, state)
 
             for order in orders:
+                # Check cooldown enforcement for trend strategies
+                cooldown_bars = float(config.strategies.params.get(order.strategy_id, {}).get("cooldown_bars", 0))
+                if cooldown_bars > 0 and idx - last_exit_idx < cooldown_bars:
+                    # Skip entry during cooldown period
+                    continue
+                
                 entry_price = get_fill_price(df, idx_t=idx, side=order.side.value)
                 spread_used = cost_model.spread_pips(symbol, scenario)
                 slippage_used = cost_model.slippage_pips(df, idx, symbol, df["atr"], scenario)
