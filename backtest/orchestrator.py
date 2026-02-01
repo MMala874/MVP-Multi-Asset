@@ -110,6 +110,9 @@ def _prepare_features(
 
         pip_size = PIP_SIZES.get(symbol, 0.0001)
         if "atr_pips" not in df_local:
+            # Ensure atr exists before computing atr_pips
+            if "atr" not in df_local:
+                df_local["atr"] = atr(df_local, 14)
             df_local["atr_pips"] = df_local["atr"] / pip_size
 
 
