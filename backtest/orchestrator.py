@@ -109,7 +109,7 @@ def _prepare_features(
         df_local = _ensure_ohlc(df_local)
 
         for spec in strategies:
-            df_local = _apply_strategy_features(df_local, spec)
+            df_local = _apply_strategy_features(df_local, spec, symbol)
 
         pip_size = PIP_SIZES.get(symbol, 0.0001)
         if "atr_pips" not in df_local:
@@ -139,7 +139,7 @@ def _ensure_ohlc(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _apply_strategy_features(df: pd.DataFrame, spec: _StrategySpec) -> pd.DataFrame:
+def _apply_strategy_features(df: pd.DataFrame, spec: _StrategySpec, symbol: str) -> pd.DataFrame:
     if spec.name == "S1_TREND_EMA_ATR_ADX":
         ema_fast = int(spec.params.get("ema_fast", 20))
         ema_slow = int(spec.params.get("ema_slow", 50))
