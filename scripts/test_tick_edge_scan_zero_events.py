@@ -89,9 +89,9 @@ def test_streaming_mode_zero_events():
             assert decision['status'] in ['INSUFFICIENT_DATA', 'NO-GO'], \
                 f"Expected decision to be INSUFFICIENT_DATA or NO-GO for 0 events, got {decision['status']}"
             
-            print(f"  ✅ Script completed successfully (no UnboundLocalError)")
-            print(f"  ✅ summary.json created with {meta['n_ticks']} ticks, {meta['n_bars']} bars, {meta['n_events']} events")
-            print(f"  ✅ Decision: {decision['status']}")
+            print(f"  [OK] Script completed successfully (no UnboundLocalError)")
+            print(f"  [OK] summary.json created with {meta['n_ticks']} ticks, {meta['n_bars']} bars, {meta['n_events']} events")
+            print(f"  [OK] Decision: {decision['status']}")
             print("  PASS: Streaming mode with 0 events handled correctly")
             return True
             
@@ -112,7 +112,7 @@ def main():
         print("="*70 + "\n")
         return True
     except Exception as e:
-        print(f"\n❌ Test failed: {e}")
+        print(f"\n[FAIL] Test failed: {e}")
         import traceback
         traceback.print_exc()
         print("="*70 + "\n")

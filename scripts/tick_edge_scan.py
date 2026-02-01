@@ -56,26 +56,32 @@ def parse_args():
     parser.add_argument(
         "--compression_duration_min",
         type=int,
-        default=10,
-        help="Min duration for compression event in minutes",
+        default=5,
+        help="Min duration for compression event in minutes (default 5)",
     )
     parser.add_argument(
-        "--tick_count_percentile",
+        "--comp_vol_pct",
         type=int,
         default=10,
-        help="Percentile threshold for tick_count (lower = less active)",
+        help="Volume (tick_count) percentile threshold for compression (default 10, lower=stricter)",
     )
     parser.add_argument(
-        "--range_percentile",
-        type=int,
-        default=10,
-        help="Percentile threshold for tick range",
-    )
-    parser.add_argument(
-        "--spread_percentile",
+        "--comp_tick_pct",
         type=int,
         default=20,
-        help="Percentile threshold for spread_std",
+        help="Tick range percentile threshold for compression (default 20, lower=stricter)",
+    )
+    parser.add_argument(
+        "--comp_spread_std_pct",
+        type=int,
+        default=50,
+        help="Spread std percentile threshold for compression (default 50, -1=disabled)",
+    )
+    parser.add_argument(
+        "--expansion_vol_pct",
+        type=int,
+        default=30,
+        help="Volume percentile threshold to trigger expansion (default 30)",
     )
     parser.add_argument(
         "--assumed_spread_pips",
@@ -593,19 +599,22 @@ def build_minute_bars(ticks_df, bar_period_sec=60, verbose=False):
 
 def detect_compression_events(
     df_bars,
-    tick_count_percentile=10,
-    range_percentile=10,
-    spread_percentile=20,
+    comp_vol_pct=10,
+    comp_tick_pct=20,
+    comp_spread_std_pct=50,
     lookback_window_days=2,
-    compression_duration_min=10,
+    compression_duration_min=5,
     verbose=False,
 ):
     """
     Detect compression events where:
-      - tick_count < percentile
-      - micro_range < percentile
-      - spread_std < percentile
+      - tick_count < comp_vol_pct percentile
+      - micro_range < comp_tick_pct percentile
+      - spread_std < comp_spread_std_pct percentile (if comp_spread_std_pct >= 0)
       - Duration >= compression_duration_min
+    
+    Args:
+      comp_spread_std_pct: Spread std percentile threshold. If -1, spread check is disabled.
     
     Returns:
       list of dict with event info (start_time, end_time, duration_min, etc.)
@@ -626,12 +635,20 @@ def detect_compression_events(
         window=lookback_bars, min_periods=1
     ).apply(lambda x: sp_stats.percentileofscore(x, x.iloc[-1], kind='rank'), raw=False)
     
-    # Compression flag (all 3 conditions met)
-    df_bars['compression'] = (
-        (df_bars['tick_count_pct'] < tick_count_percentile) &
-        (df_bars['range_pct'] < range_percentile) &
-        (df_bars['spread_std_pct'] < spread_percentile)
-    ).astype(int)
+    # Compression flag (all conditions met)
+    # If comp_spread_std_pct < 0, don't include spread in compression check
+    compression_condition = (
+        (df_bars['tick_count_pct'] < comp_vol_pct) &
+        (df_bars['range_pct'] < comp_tick_pct)
+    )
+    
+    if comp_spread_std_pct >= 0:
+        compression_condition = (
+            compression_condition &
+            (df_bars['spread_std_pct'] < comp_spread_std_pct)
+        )
+    
+    df_bars['compression'] = compression_condition.astype(int)
     
     # Identify contiguous compression blocks
     df_bars['compression_block'] = (
@@ -655,8 +672,17 @@ def detect_compression_events(
             }
             events.append(event)
     
+    # Print threshold summary
+    spread_str = f"spread_std<={comp_spread_std_pct}%" if comp_spread_std_pct >= 0 else "spread_std=disabled"
+    threshold_summary = (
+        f"Compression thresholds: vol<={comp_vol_pct}%, ticks<={comp_tick_pct}%, "
+        f"{spread_str}, min_duration={compression_duration_min}min"
+    )
+    if verbose or len(events) == 0:
+        print(f"[Compression Detection] {threshold_summary}")
+    
     if verbose:
-        print(f"Detected {len(events)} compression events (>={compression_duration_min} min)")
+        print(f"  Detected {len(events)} events (>={compression_duration_min} min)")
     
     return events
 
@@ -980,9 +1006,9 @@ def main():
     # Detect compression events
     events = detect_compression_events(
         df_bars,
-        tick_count_percentile=args.tick_count_percentile,
-        range_percentile=args.range_percentile,
-        spread_percentile=args.spread_percentile,
+        comp_vol_pct=args.comp_vol_pct,
+        comp_tick_pct=args.comp_tick_pct,
+        comp_spread_std_pct=args.comp_spread_std_pct,
         lookback_window_days=args.lookback_window_days,
         compression_duration_min=args.compression_duration_min,
         verbose=args.verbose,
@@ -1032,9 +1058,10 @@ def main():
         'parameters': {
             'bar_period_sec': args.bar_period_sec,
             'compression_duration_min': args.compression_duration_min,
-            'tick_count_percentile': args.tick_count_percentile,
-            'range_percentile': args.range_percentile,
-            'spread_percentile': args.spread_percentile,
+            'comp_vol_pct': args.comp_vol_pct,
+            'comp_tick_pct': args.comp_tick_pct,
+            'comp_spread_std_pct': args.comp_spread_std_pct,
+            'expansion_vol_pct': args.expansion_vol_pct,
             'lookback_window_days': args.lookback_window_days,
             'min_years_analyzed': args.min_years_analyzed,
             'min_events_per_year': args.min_events_per_year,
