@@ -84,6 +84,18 @@ def parse_args():
         help="Volume percentile threshold to trigger expansion (default 30)",
     )
     parser.add_argument(
+        "--activation_tick_rate_pct",
+        type=int,
+        default=90,
+        help="Tick rate percentile threshold for activation trigger (default 90)",
+    )
+    parser.add_argument(
+        "--activation_range_mult",
+        type=float,
+        default=1.5,
+        help="Range multiple of baseline for activation trigger (default 1.5)",
+    )
+    parser.add_argument(
         "--assumed_spread_pips",
         type=float,
         default=1.0,
@@ -118,6 +130,12 @@ def parse_args():
         type=int,
         default=2000,
         help="Max age (ms) for quote reconstruction forward-fill (default 2000)",
+    )
+    parser.add_argument(
+        "--permutation_iters",
+        type=int,
+        default=1000,
+        help="Number of permutations for baseline test (default 1000)",
     )
     parser.add_argument(
         "--start",
@@ -597,6 +615,51 @@ def build_minute_bars(ticks_df, bar_period_sec=60, verbose=False):
     return df_bars
 
 
+def compute_compression_flags(
+    df_bars,
+    comp_vol_pct=10,
+    comp_tick_pct=20,
+    comp_spread_std_pct=50,
+    lookback_window_days=2,
+):
+    """Compute compression flags (unchanged logic) and return augmented DataFrame."""
+    df_bars = df_bars.copy()
+    lookback_bars = lookback_window_days * 24 * 60  # assume 1-min bars
+
+    # Calculate rolling percentiles
+    df_bars['tick_count_pct'] = df_bars['tick_count'].rolling(
+        window=lookback_bars, min_periods=1
+    ).apply(lambda x: sp_stats.percentileofscore(x, x.iloc[-1], kind='rank'), raw=False)
+
+    df_bars['range_pct'] = df_bars['micro_range'].rolling(
+        window=lookback_bars, min_periods=1
+    ).apply(lambda x: sp_stats.percentileofscore(x, x.iloc[-1], kind='rank'), raw=False)
+
+    df_bars['spread_std_pct'] = df_bars['spread_std'].rolling(
+        window=lookback_bars, min_periods=1
+    ).apply(lambda x: sp_stats.percentileofscore(x, x.iloc[-1], kind='rank'), raw=False)
+
+    # Compression flag (all conditions met)
+    # If comp_spread_std_pct < 0, don't include spread in compression check
+    compression_condition = (
+        (df_bars['tick_count_pct'] < comp_vol_pct) &
+        (df_bars['range_pct'] < comp_tick_pct)
+    )
+
+    if comp_spread_std_pct >= 0:
+        compression_condition = (
+            compression_condition &
+            (df_bars['spread_std_pct'] < comp_spread_std_pct)
+        )
+
+    df_bars['compression'] = compression_condition.astype(int)
+    df_bars['compression_block'] = (
+        (df_bars['compression'].diff() != 0).cumsum()
+    )
+
+    return df_bars
+
+
 def detect_compression_events(
     df_bars,
     comp_vol_pct=10,
@@ -612,53 +675,25 @@ def detect_compression_events(
       - micro_range < comp_tick_pct percentile
       - spread_std < comp_spread_std_pct percentile (if comp_spread_std_pct >= 0)
       - Duration >= compression_duration_min
-    
+
     Args:
       comp_spread_std_pct: Spread std percentile threshold. If -1, spread check is disabled.
-    
+
     Returns:
       list of dict with event info (start_time, end_time, duration_min, etc.)
     """
-    df_bars = df_bars.copy()
-    lookback_bars = lookback_window_days * 24 * 60  # assume 1-min bars
-    
-    # Calculate rolling percentiles
-    df_bars['tick_count_pct'] = df_bars['tick_count'].rolling(
-        window=lookback_bars, min_periods=1
-    ).apply(lambda x: sp_stats.percentileofscore(x, x.iloc[-1], kind='rank'), raw=False)
-    
-    df_bars['range_pct'] = df_bars['micro_range'].rolling(
-        window=lookback_bars, min_periods=1
-    ).apply(lambda x: sp_stats.percentileofscore(x, x.iloc[-1], kind='rank'), raw=False)
-    
-    df_bars['spread_std_pct'] = df_bars['spread_std'].rolling(
-        window=lookback_bars, min_periods=1
-    ).apply(lambda x: sp_stats.percentileofscore(x, x.iloc[-1], kind='rank'), raw=False)
-    
-    # Compression flag (all conditions met)
-    # If comp_spread_std_pct < 0, don't include spread in compression check
-    compression_condition = (
-        (df_bars['tick_count_pct'] < comp_vol_pct) &
-        (df_bars['range_pct'] < comp_tick_pct)
+    df_bars = compute_compression_flags(
+        df_bars,
+        comp_vol_pct=comp_vol_pct,
+        comp_tick_pct=comp_tick_pct,
+        comp_spread_std_pct=comp_spread_std_pct,
+        lookback_window_days=lookback_window_days,
     )
-    
-    if comp_spread_std_pct >= 0:
-        compression_condition = (
-            compression_condition &
-            (df_bars['spread_std_pct'] < comp_spread_std_pct)
-        )
-    
-    df_bars['compression'] = compression_condition.astype(int)
-    
-    # Identify contiguous compression blocks
-    df_bars['compression_block'] = (
-        (df_bars['compression'].diff() != 0).cumsum()
-    )
-    
+
     events = []
     for block_id, block_data in df_bars[df_bars['compression'] == 1].groupby('compression_block'):
         duration_min = len(block_data)
-        
+
         if duration_min >= compression_duration_min:
             event = {
                 'start_idx': block_data.index.min(),
@@ -671,7 +706,7 @@ def detect_compression_events(
                 'avg_spread_std': block_data['spread_std'].mean(),
             }
             events.append(event)
-    
+
     # Print threshold summary
     spread_str = f"spread_std<={comp_spread_std_pct}%" if comp_spread_std_pct >= 0 else "spread_std=disabled"
     threshold_summary = (
@@ -680,41 +715,105 @@ def detect_compression_events(
     )
     if verbose or len(events) == 0:
         print(f"[Compression Detection] {threshold_summary}")
-    
+
     if verbose:
         print(f"  Detected {len(events)} events (>={compression_duration_min} min)")
-    
+
     return events
 
 
-def compute_forward_metrics(df_bars, event, horizon_min=[5, 15, 30]):
+def detect_activation_events(
+    df_bars,
+    compression_events,
+    comp_vol_pct=10,
+    comp_tick_pct=20,
+    comp_spread_std_pct=50,
+    lookback_window_days=2,
+    activation_tick_rate_pct=90,
+    activation_range_mult=1.5,
+    compression_duration_min=5,
+    verbose=False,
+):
     """
-    For a given event, compute forward returns/vol/spread over multiple horizons.
-    Includes forward spread metrics for tradeability assessment.
-    
+    Detect activation events when compression is active AND activation trigger fires.
+
+    Activation trigger:
+      - tick_rate_1m >= P90 of rolling baseline, OR
+      - range_1m >= k * baseline_range_1m
+
     Returns:
-      dict with forward metrics: forward_vol_5m, forward_range_5m, forward_spread_mean_5m, etc.
+      list of dict with compression + activation info.
     """
-    event_end_idx = event['end_idx']
-    
-    # Event entry point: one bar after event ends
-    entry_idx = event_end_idx + 1
-    
+    df_bars = compute_compression_flags(
+        df_bars,
+        comp_vol_pct=comp_vol_pct,
+        comp_tick_pct=comp_tick_pct,
+        comp_spread_std_pct=comp_spread_std_pct,
+        lookback_window_days=lookback_window_days,
+    )
+    lookback_bars = lookback_window_days * 24 * 60
+
+    df_bars['tick_rate_p90'] = df_bars['tick_count'].rolling(
+        window=lookback_bars, min_periods=1
+    ).quantile(activation_tick_rate_pct / 100.0)
+
+    df_bars['range_baseline_1m'] = df_bars['micro_range'].rolling(
+        window=lookback_bars, min_periods=1
+    ).mean()
+
+    df_bars['activation_trigger'] = (
+        (df_bars['tick_count'] >= df_bars['tick_rate_p90']) |
+        (df_bars['micro_range'] >= activation_range_mult * df_bars['range_baseline_1m'])
+    )
+
+    activation_events = []
+    for event in compression_events:
+        block_data = df_bars.loc[event['start_idx']:event['end_idx']]
+        if len(block_data) < compression_duration_min:
+            continue
+
+        activation_rows = block_data[block_data['activation_trigger']]
+        if activation_rows.empty:
+            continue
+
+        activation_idx = activation_rows.index.min()
+        activation_row = df_bars.loc[activation_idx]
+
+        activation_event = {
+            **event,
+            'activation_idx': activation_idx,
+            'activation_time': activation_row['time'],
+            'activation_tick_count': activation_row['tick_count'],
+            'activation_micro_range': activation_row['micro_range'],
+            'activation_tick_rate_p90': activation_row['tick_rate_p90'],
+            'activation_range_baseline_1m': activation_row['range_baseline_1m'],
+        }
+        activation_events.append(activation_event)
+
+    if verbose:
+        print(
+            "[Activation Detection] "
+            f"tick_rate>=P{activation_tick_rate_pct} OR range>={activation_range_mult}x baseline"
+        )
+        print(f"  Detected {len(activation_events)} activation events")
+
+    return activation_events
+
+
+def compute_forward_metrics_from_index(df_bars, entry_idx, horizon_min=[5, 15, 30]):
+    """Compute forward metrics from a given entry index."""
     if entry_idx >= len(df_bars):
         return None
-    
+
     metrics = {
-        'event_start_time': event['start_time'],
-        'event_end_time': event['end_time'],
-        'event_duration_min': event['duration_min'],
         'entry_time': df_bars.loc[entry_idx, 'time'],
         'entry_bid': df_bars.loc[entry_idx, 'bid_open'],
     }
-    
+
     for h in horizon_min:
         end_idx = min(entry_idx + h, len(df_bars) - 1)
         horizon_bars = df_bars.loc[entry_idx:end_idx]
-        
+
         if len(horizon_bars) < 2:
             metrics[f'forward_vol_{h}m'] = np.nan
             metrics[f'forward_range_{h}m'] = np.nan
@@ -724,28 +823,62 @@ def compute_forward_metrics(df_bars, event, horizon_min=[5, 15, 30]):
             metrics[f'forward_spread_mean_{h}m'] = np.nan
             metrics[f'forward_spread_std_{h}m'] = np.nan
             continue
-        
+
         # Forward volatility (realized vol in period)
         forward_vol = horizon_bars['realized_vol'].mean()
         metrics[f'forward_vol_{h}m'] = forward_vol
-        
+
         # Forward range (max-min bid in period)
         bid_prices = horizon_bars['bid_close'].values
         forward_range = bid_prices.max() - bid_prices.min()
         metrics[f'forward_range_{h}m'] = forward_range
-        
+
         # Forward returns (bid close-to-close)
         returns = np.diff(bid_prices) / bid_prices[:-1]
         metrics[f'forward_return_mean_{h}m'] = returns.mean()
         metrics[f'forward_return_std_{h}m'] = returns.std()
         metrics[f'forward_return_p95_{h}m'] = np.percentile(returns, 95) if len(returns) > 0 else np.nan
-        
+
         # Forward spread metrics (tradeability)
         forward_spread_mean = horizon_bars['spread_mean'].mean()
         forward_spread_std = horizon_bars['spread_std'].mean()
         metrics[f'forward_spread_mean_{h}m'] = forward_spread_mean
         metrics[f'forward_spread_std_{h}m'] = forward_spread_std
-    
+
+    return metrics
+
+
+def compute_forward_metrics(df_bars, event, horizon_min=[5, 15, 30]):
+    """
+    For a given event, compute forward returns/vol/spread over multiple horizons.
+    Includes forward spread metrics for tradeability assessment.
+
+    Returns:
+      dict with forward metrics: forward_vol_5m, forward_range_5m, forward_spread_mean_5m, etc.
+    """
+    activation_idx = event.get('activation_idx')
+    event_end_idx = event['end_idx']
+
+    # Entry point: activation timestamp if available, else one bar after compression ends
+    entry_idx = activation_idx if activation_idx is not None else event_end_idx + 1
+
+    base_metrics = compute_forward_metrics_from_index(df_bars, entry_idx, horizon_min=horizon_min)
+    if base_metrics is None:
+        return None
+
+    metrics = {
+        'event_start_time': event['start_time'],
+        'event_end_time': event['end_time'],
+        'event_duration_min': event['duration_min'],
+        **base_metrics,
+    }
+    if activation_idx is not None:
+        metrics['activation_time'] = event.get('activation_time')
+        metrics['activation_tick_count'] = event.get('activation_tick_count')
+        metrics['activation_micro_range'] = event.get('activation_micro_range')
+        metrics['activation_tick_rate_p90'] = event.get('activation_tick_rate_p90')
+        metrics['activation_range_baseline_1m'] = event.get('activation_range_baseline_1m')
+
     return metrics
 
 
@@ -780,9 +913,9 @@ def compute_baseline(df_bars, events, max_horizon_min=30, verbose=False):
     
     for event in events:
         event_start_idx = event['start_idx']
-        event_end_idx = event['end_idx']
-        forward_end_idx = min(event_end_idx + max_horizon_min, len(df_bars_clean) - 1)
-        
+        activation_idx = event.get('activation_idx', event.get('end_idx'))
+        forward_end_idx = min(activation_idx + max_horizon_min, len(df_bars_clean) - 1)
+
         exclude_mask[event_start_idx:forward_end_idx+1] = True
     
     # Compute baseline only on non-excluded bars
@@ -814,8 +947,11 @@ def compute_effect_size(df_events, baseline, horizons=[5, 15, 30], verbose=False
     if len(df_events) == 0:
         return None, None
     
-    # Extract year from event times
-    df_events['year'] = df_events['event_start_time'].dt.year
+    # Extract year from activation time when available
+    if 'activation_time' in df_events.columns:
+        df_events['year'] = pd.to_datetime(df_events['activation_time']).dt.year
+    else:
+        df_events['year'] = df_events['event_start_time'].dt.year
     years = sorted(df_events['year'].unique())
     
     effect_sizes = {}
@@ -863,6 +999,66 @@ def compute_effect_size(df_events, baseline, horizons=[5, 15, 30], verbose=False
             effect_sizes[f'spread_ratio_{h}m'] = spread_ratio
     
     return effect_sizes, stability_per_year
+
+
+def compute_baseline_forward_metrics(df_bars, events, horizons=[5, 15, 30], max_horizon_min=30):
+    """Compute baseline forward metrics for permutation testing."""
+    exclude_mask = np.zeros(len(df_bars), dtype=bool)
+    for event in events:
+        event_start_idx = event['start_idx']
+        activation_idx = event.get('activation_idx', event.get('end_idx'))
+        forward_end_idx = min(activation_idx + max_horizon_min, len(df_bars) - 1)
+        exclude_mask[event_start_idx:forward_end_idx+1] = True
+
+    candidate_indices = np.where(~exclude_mask)[0]
+    baseline_metrics = {f'forward_vol_{h}m': [] for h in horizons}
+    baseline_metrics.update({f'forward_range_{h}m': [] for h in horizons})
+
+    for idx in candidate_indices:
+        metrics = compute_forward_metrics_from_index(df_bars, idx, horizon_min=horizons)
+        if metrics is None:
+            continue
+        for h in horizons:
+            vol_key = f'forward_vol_{h}m'
+            range_key = f'forward_range_{h}m'
+            if not np.isnan(metrics.get(vol_key, np.nan)):
+                baseline_metrics[vol_key].append(metrics[vol_key])
+            if not np.isnan(metrics.get(range_key, np.nan)):
+                baseline_metrics[range_key].append(metrics[range_key])
+
+    return baseline_metrics
+
+
+def run_permutation_test(df_events, baseline_metrics, horizons=[5, 15, 30], n_permutations=1000, seed=42):
+    """Run permutation test comparing event means vs baseline sample means."""
+    rng = np.random.default_rng(seed)
+    if len(df_events) == 0:
+        return {}
+
+    results = {}
+    n_events = len(df_events)
+    for h in horizons:
+        for metric in ['forward_vol', 'forward_range']:
+            key = f'{metric}_{h}m'
+            if key not in df_events.columns:
+                continue
+
+            observed = df_events[key].mean()
+            baseline_values = np.array(baseline_metrics.get(key, []))
+            if len(baseline_values) < n_events or len(baseline_values) == 0:
+                results[f'{key}_p_value'] = None
+                continue
+
+            perm_means = []
+            for _ in range(n_permutations):
+                sample = rng.choice(baseline_values, size=n_events, replace=False)
+                perm_means.append(sample.mean())
+            perm_means = np.array(perm_means)
+
+            p_value = (np.sum(perm_means >= observed) + 1) / (n_permutations + 1)
+            results[f'{key}_p_value'] = p_value
+
+    return results
 
 
 def make_go_no_go_decision(effect_sizes, stability_per_year, min_years_analyzed=5, min_events_per_year=20, threshold_ratio=1.05, threshold_consistency=0.60):
@@ -1003,8 +1199,8 @@ def main():
             'date_range': (df_bars['time'].min(), df_bars['time'].max()),
         }
     
-    # Detect compression events
-    events = detect_compression_events(
+    # Detect compression events (unchanged logic)
+    compression_events = detect_compression_events(
         df_bars,
         comp_vol_pct=args.comp_vol_pct,
         comp_tick_pct=args.comp_tick_pct,
@@ -1013,16 +1209,40 @@ def main():
         compression_duration_min=args.compression_duration_min,
         verbose=args.verbose,
     )
-    
-    # Compute forward metrics
-    df_events = process_events(df_bars, events, verbose=args.verbose)
-    
+
+    # Detect activation events (compression + microstructure activation)
+    activation_events = detect_activation_events(
+        df_bars,
+        compression_events,
+        comp_vol_pct=args.comp_vol_pct,
+        comp_tick_pct=args.comp_tick_pct,
+        comp_spread_std_pct=args.comp_spread_std_pct,
+        lookback_window_days=args.lookback_window_days,
+        activation_tick_rate_pct=args.activation_tick_rate_pct,
+        activation_range_mult=args.activation_range_mult,
+        compression_duration_min=args.compression_duration_min,
+        verbose=args.verbose,
+    )
+
+    # Compute forward metrics from activation timestamps
+    df_events = process_events(df_bars, activation_events, verbose=args.verbose)
+
     # Baseline (excluding event windows and forward windows)
-    baseline = compute_baseline(df_bars, events, max_horizon_min=30, verbose=args.verbose)
+    baseline = compute_baseline(df_bars, activation_events, max_horizon_min=30, verbose=args.verbose)
     
     # Effect size + stability
     effect_sizes, stability_per_year = compute_effect_size(
         df_events, baseline, verbose=args.verbose
+    )
+
+    # Permutation test vs baseline
+    baseline_forward_metrics = compute_baseline_forward_metrics(
+        df_bars, activation_events, max_horizon_min=30
+    )
+    permutation_results = run_permutation_test(
+        df_events,
+        baseline_forward_metrics,
+        n_permutations=args.permutation_iters,
     )
     
     # Decision with stability gating
@@ -1062,13 +1282,17 @@ def main():
             'comp_tick_pct': args.comp_tick_pct,
             'comp_spread_std_pct': args.comp_spread_std_pct,
             'expansion_vol_pct': args.expansion_vol_pct,
+            'activation_tick_rate_pct': args.activation_tick_rate_pct,
+            'activation_range_mult': args.activation_range_mult,
             'lookback_window_days': args.lookback_window_days,
             'min_years_analyzed': args.min_years_analyzed,
             'min_events_per_year': args.min_events_per_year,
             'assumed_spread_pips': args.assumed_spread_pips,
+            'permutation_iters': args.permutation_iters,
         },
         'imputation': imputation_meta,
         'baseline': baseline,
+        'permutation_test': permutation_results,
         'effect_sizes': effect_sizes,
         'stability_per_year': stability_per_year,
         'decision': decision,
@@ -1104,6 +1328,13 @@ def main():
     print("\nEffect sizes (ratio post-event / baseline):")
     for k, v in (effect_sizes or {}).items():
         print(f"  {k}: {v:.3f}")
+
+    print("\nPermutation test p-values (event mean vs baseline):")
+    for k, v in (permutation_results or {}).items():
+        if v is None:
+            print(f"  {k}: n/a (insufficient baseline)")
+        else:
+            print(f"  {k}: {v:.4f}")
     
     print("\nStability per year (qualifying years only):")
     for metric, yearly_data in (stability_per_year or {}).items():
