@@ -16,7 +16,7 @@ regime:
   spike_tr_atr_th: 2.5
 strategies:
   enabled:
-    - S4_TREND_COND_MEAN_REVERSION
+    - S7_HTF_TREND_LTF_PULLBACK
   params:
     S1_TREND_BREAKOUT_RETEST:
         ema_fast: 30
@@ -142,11 +142,33 @@ strategies:
       atr_period: 14
       k_sl: 2.5
       min_sl_points: 8.0
-      # ATR-based take profit
-      k_tp: 1.5
+      # Take profit disabled by default (rely on Z_EXIT for MR)
+      k_tp: null
       min_tp_points: 5.0
       # Anti-overtrading
       cooldown_bars: 0
+    S7_HTF_TREND_LTF_PULLBACK:
+      # H4 trend bias (merged from H4, shift(1))
+      ema_fast_h4: 50
+      ema_slow_h4: 200
+      adx_period_h4: 14
+      adx_min_h4: 20
+      # H1 trailing/stop management (merged from H1, shift(1))
+      atr_period_h1: 14
+      chandelier_window_h1: 22
+      # M15 entry (pullback detection)
+      ema_pullback_m15: 20
+      ema_trend_m15: 50
+      atr_period_m15: 14
+      slope_window_m15: 20
+      # Pullback depth validation
+      pullback_min: 0.3
+      pullback_max: 1.2
+      # SL calculation
+      k_sl_h1: 2.0
+      min_sl_points: 15
+      # Anti-overtrading
+      cooldown_bars: 4
 risk:
   max_hold_bars: 96
   r_base: 0.002
@@ -156,7 +178,7 @@ risk:
     usd_exposure_cap: 100000
   conflict_policy: priority
   priority_order:
-    - S4_TREND_COND_MEAN_REVERSION
+    - S7_HTF_TREND_LTF_PULLBACK
   dd_day_limit: 0.02
   dd_week_limit: 0.05
   max_execution_errors: 3

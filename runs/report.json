@@ -1,23 +1,134 @@
 {
   "metrics": {
-    "by_regime": {},
-    "by_scenario": {},
-    "by_strategy": {},
-    "by_symbol": {},
+    "by_regime": {
+      "VOL=HIGH|SPIKE=0": {
+        "cvar_95": -62.77236540743014,
+        "expectancy": -7.793416276595854,
+        "max_drawdown": -23804.02852019608,
+        "max_loss_streak": 16.0,
+        "max_win_streak": 6.0,
+        "profit_factor": 0.5523993242777973,
+        "trades": 3043.0
+      },
+      "VOL=HIGH|SPIKE=1": {
+        "cvar_95": -55.22128925207722,
+        "expectancy": -9.955384866530625,
+        "max_drawdown": -1108.3277496723092,
+        "max_loss_streak": 6.0,
+        "max_win_streak": 3.0,
+        "profit_factor": 0.3895450641730816,
+        "trades": 106.0
+      },
+      "VOL=LOW|SPIKE=0": {
+        "cvar_95": -33.49580921068453,
+        "expectancy": -3.862734630548254,
+        "max_drawdown": -26733.606563206187,
+        "max_loss_streak": 25.0,
+        "max_win_streak": 8.0,
+        "profit_factor": 0.5993711937014582,
+        "trades": 6862.0
+      },
+      "VOL=LOW|SPIKE=1": {
+        "cvar_95": -29.863099048833824,
+        "expectancy": -8.779033454013527,
+        "max_drawdown": -1064.7236783796398,
+        "max_loss_streak": 18.0,
+        "max_win_streak": 2.0,
+        "profit_factor": 0.10251133829995411,
+        "trades": 123.0
+      },
+      "VOL=MID|SPIKE=0": {
+        "cvar_95": -44.83347287123752,
+        "expectancy": -4.646095620592801,
+        "max_drawdown": -25503.830969530354,
+        "max_loss_streak": 25.0,
+        "max_win_streak": 6.0,
+        "profit_factor": 0.6226005533000137,
+        "trades": 5317.0
+      },
+      "VOL=MID|SPIKE=1": {
+        "cvar_95": -51.53759262244138,
+        "expectancy": -12.493906609155026,
+        "max_drawdown": -1828.767019978549,
+        "max_loss_streak": 12.0,
+        "max_win_streak": 3.0,
+        "profit_factor": 0.20493290361599573,
+        "trades": 152.0
+      }
+    },
+    "by_scenario": {
+      "A": {
+        "cvar_95": -45.74438862687095,
+        "expectancy": -3.590797433755827,
+        "max_drawdown": -19112.802376777523,
+        "max_loss_streak": 19.0,
+        "max_win_streak": 6.0,
+        "profit_factor": 0.6771015486087357,
+        "trades": 5196.0
+      },
+      "B": {
+        "cvar_95": -46.514428581225054,
+        "expectancy": -4.409456271063982,
+        "max_drawdown": -23074.84477984839,
+        "max_loss_streak": 19.0,
+        "max_win_streak": 6.0,
+        "profit_factor": 0.6227877431941076,
+        "trades": 5199.0
+      },
+      "C": {
+        "cvar_95": -49.42940566334995,
+        "expectancy": -7.176720482992661,
+        "max_drawdown": -37519.57004388247,
+        "max_loss_streak": 26.0,
+        "max_win_streak": 6.0,
+        "profit_factor": 0.476265924623412,
+        "trades": 5208.0
+      }
+    },
+    "by_strategy": {
+      "S7_HTF_TREND_LTF_PULLBACK": {
+        "cvar_95": -47.36954223341701,
+        "expectancy": -5.0604952185145615,
+        "max_drawdown": -79413.92580546475,
+        "max_loss_streak": 26.0,
+        "max_win_streak": 6.0,
+        "profit_factor": 0.5842550904664964,
+        "trades": 15603.0
+      }
+    },
+    "by_symbol": {
+      "EURUSD": {
+        "cvar_95": -47.36954223341701,
+        "expectancy": -5.0604952185145615,
+        "max_drawdown": -79413.92580546475,
+        "max_loss_streak": 26.0,
+        "max_win_streak": 6.0,
+        "profit_factor": 0.5842550904664964,
+        "trades": 15603.0
+      }
+    },
     "overall": {
-      "cvar_95": 0.0,
-      "expectancy": 0.0,
-      "max_drawdown": 0.0,
-      "max_loss_streak": 0.0,
-      "max_win_streak": 0.0,
-      "profit_factor": 0.0,
-      "trades": 0.0
+      "cvar_95": -47.36954223341701,
+      "expectancy": -5.0604952185145615,
+      "max_drawdown": -79413.92580546475,
+      "max_loss_streak": 26.0,
+      "max_win_streak": 6.0,
+      "profit_factor": 0.5842550904664964,
+      "trades": 15603.0
     }
   },
   "summary": {
-    "scenarios": [],
-    "strategies": [],
-    "symbols": [],
-    "total_trades": 0
+    "scenarios": [
+      "A",
+      "B",
+      "C"
+    ],
+    "strategies": [
+      "S7_HTF_TREND_LTF_PULLBACK"
+    ],
+    "symbols": [
+      "EURUSD"
+    ],
+    "total_trades": 15603
   }
 }

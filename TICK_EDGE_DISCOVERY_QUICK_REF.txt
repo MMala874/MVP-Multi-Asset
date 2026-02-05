@@ -1,0 +1,303 @@
+TICK-LEVEL EDGE DISCOVERY - QUICK REFERENCE
+=============================================
+
+WHAT IS THIS?
+=============
+Rigorous statistical framework for discovering real market edges at tick level.
+Does NOT curve-fit. Does NOT use indicators. Does NOT predict direction.
+Instead: finds volatility compression → detects return distribution shift → decides GO/NO-GO.
+
+
+THE HYPOTHESIS
+==============
+When EURUSD experiences extreme volatility compression (tick-level):
+  • Tick activity drops below 10th percentile (historically)
+  • Price range drops below 10th percentile
+  • Spread volatility drops below 20th percentile
+  • Duration >= 10 minutes
+
+→ Distribution of subsequent returns CHANGES significantly
+→ IF consistent across years → EDGE exists → GO
+
+
+THE PIPELINE (6 STAGES)
+=======================
+1. Load MT5 ticks (bid/ask) from CSV
+2. Build 1-minute bars + compute tick-level features
+3. Detect compression events (all 3 conditions + duration)
+4. Calculate forward returns (5m/15m/30m after event)
+5. Compute effect sizes (post-event vs baseline)
+6. Decide: GO if effect >1.05 in >=60% of years, else NO-GO
+
+
+FILES
+=====
+Executable:
+  • scripts/tick_edge_scan.py (620 lines, fully vectorized)
+  • scripts/example_tick_edge_workflow.py (integration example)
+
+Documentation:
+  • scripts/TICK_EDGE_SCAN_README.txt (detailed usage)
+  • TICK_EDGE_DISCOVERY_SUMMARY.txt (this file + more)
+
+Outputs (after running):
+  • outputs/events.csv (one row per detected event)
+  • outputs/summary.json (effect sizes + per-year stability)
+  • outputs/workflow_log.txt (execution log)
+
+
+RUN IT (3 STEPS)
+================
+
+1. Export MT5 ticks:
+   • MT5 > Tools > History Center
+   • EURUSD > Download > Export
+   • Save to: data/EURUSD_ticks.csv
+   • Columns: time, bid, ask
+
+2. Run scanner:
+   .venv\Scripts\python.exe scripts/tick_edge_scan.py \
+     --tick_file data/EURUSD_ticks.csv \
+     --verbose
+
+3. Check results:
+   • outputs/summary.json: decision field (GO/NO-GO)
+   • outputs/events.csv: all events with forward metrics
+
+
+INTERPRET OUTPUT
+================
+
+summary.json fields:
+
+  "effect_sizes": {
+    "vol_ratio_5m": 1.15,        ← Post-event vol / baseline
+    "vol_ratio_15m": 0.98,
+    "vol_ratio_30m": 1.02
+  }
+  
+  "stability_per_year": {
+    "vol_5m": [
+      { "year": 2023, "effect_ratio": 1.20, "n_events": 45 },
+      { "year": 2024, "effect_ratio": 1.10, "n_events": 52 },
+      { "year": 2025, "effect_ratio": 0.95, "n_events": 38 }
+    ]
+  }
+  
+  "decision": {
+    "status": "GO",
+    "vol_5m_consistency": 0.67,   ← 2 out of 3 years > 1.05
+    "reason": "Effect size consistent across years..."
+  }
+
+
+GO vs NO-GO
+===========
+
+GO Decision:
+  ✓ effect_ratio > 1.05 (or < 0.95) in at least 60% of years
+  ✓ Effect is consistent, not single-year randomness
+  → Proceed to Phase 1 backtest (live data, 5 years)
+  → If backtest DD < 5% → Phase 2 OOS test
+  → If OOS passes → Phase 3 paper trading
+
+
+NO-GO Decision:
+  ✗ effect_ratio close to 1.0 OR inconsistent across years
+  ✗ Even if effect exists, not robust enough
+  → Stop research on this hypothesis
+  → Try different asset / time frame / edge
+  → Or accept that compression is NOT edge
+
+
+PARAMETERS (TUNING)
+===================
+
+All parameters act on HISTORICAL data (no lookahead):
+
+--tick_count_percentile (default 10)
+  Lower = stricter compression detection (fewer events)
+  Try: 5-10 (strict) → 20-25 (loose)
+
+--range_percentile (default 10)
+  Lower = tighter bid range requirement
+  Try: 5-10 → 20
+
+--spread_percentile (default 20)
+  Lower = more stable spread requirement
+  Try: 10-15 → 35-40
+
+--compression_duration_min (default 10)
+  Higher = longer events, more rare
+  Try: 5 (frequent) → 20 (rare)
+
+Tuning workflow:
+  1. Start with defaults
+  2. If 0 events: relax all percentiles by +10
+  3. If events exist but NO-GO: check year consistency
+  4. If effect exists but small: accept NO-GO (not profitable)
+
+
+WHAT HAPPENS NEXT (IF GO)
+==========================
+
+Phase 1: Backtest (1-2 days)
+  • Run on 5-year EURUSD M15 data
+  • Freeze parameters (no optimization)
+  • Target: DD < 5%, profit factor > 1.0
+  • If passes → Phase 2
+
+Phase 2: Out-of-sample test (4 hours)
+  • Apply Phase 1 parameters to held-out 2024-2025
+  • Target: performance within 10% of Phase 1
+  • If passes → Phase 3
+
+Phase 3: Paper trading (2-4 weeks)
+  • Real-time ticks, simulated execution
+  • Monitor: actual slippage vs model
+  • Target: slippage <= 1.5 pips
+  • If passes → Phase 4
+
+Phase 4: Live trading (4-12 weeks)
+  • Real capital (1% account size)
+  • Target: monthly Sharpe >= 1.0
+  • If passes: scale position size
+
+
+WHAT HAPPENS (IF NO-GO)
+=======================
+
+Edge is rejected. Stop research on compression hypothesis.
+
+Options:
+  1. Try different asset (GBPUSD, USDJPY, EURUSD/CHF)
+  2. Try different time frame (H1 or H4 instead of M15)
+  3. Try different edge hypothesis:
+     • Momentum breakouts
+     • Mean-reversion after large moves
+     • Liquidity event detection
+     • News-driven regime shifts
+  4. Accept that this edge doesn't work
+     → Move on to next research
+
+
+ANTI-LOOKAHEAD CHECK
+====================
+
+All calculations use BACKWARD-ONLY data:
+  ✓ Percentiles computed from historical bars only
+  ✓ Compression detection uses closed bars (no future ticks)
+  ✓ Forward metrics start AFTER event ends
+  ✓ Entry point is next bar after event (realistic)
+
+Result: NO lookahead bias. Safe for live trading validation.
+
+
+TECHNICAL NOTES
+================
+
+• Vectorized: all numpy/pandas operations
+• No loops: processes 600K+ ticks in 1-2 minutes
+• Memory: ~5GB for 2 years EURUSD data
+• Dependencies: pandas, numpy, scipy (scientific stack only)
+• Reproducible: example run with synthetic data included
+• Transparent: no ML black boxes, all logic inspectable
+
+
+PHILOSOPHY
+===========
+
+GOOD: Find structural properties (vol clustering documented by Andersen 1997)
+BAD: Optimize indicator parameters (curve-fitting trap)
+
+GOOD: Test consistency across years (avoids single-year luck)
+BAD: Rely on single backtest (data snooping risk)
+
+GOOD: Accept failure quickly (cheap hypothesis testing)
+BAD: Wishful thinking (force edge to work)
+
+GOOD: Frozen parameters (prevents optimization)
+BAD: Optimize on backtest (confirms bias)
+
+
+QUICK COMMAND CHEAT SHEET
+==========================
+
+# Synthetic data test (no CSV needed)
+.venv\Scripts\python.exe scripts/tick_edge_scan.py --verbose
+
+# Real data (basic)
+.venv\Scripts\python.exe scripts/tick_edge_scan.py \
+  --tick_file data/EURUSD_ticks.csv \
+  --verbose
+
+# Real data (relaxed thresholds)
+.venv\Scripts\python.exe scripts/tick_edge_scan.py \
+  --tick_file data/EURUSD_ticks.csv \
+  --tick_count_percentile 20 \
+  --range_percentile 20 \
+  --spread_percentile 30 \
+  --verbose
+
+# Real data (strict thresholds)
+.venv\Scripts\python.exe scripts/tick_edge_scan.py \
+  --tick_file data/EURUSD_ticks.csv \
+  --tick_count_percentile 5 \
+  --range_percentile 5 \
+  --spread_percentile 15 \
+  --verbose
+
+# Custom output location
+.venv\Scripts\python.exe scripts/tick_edge_scan.py \
+  --tick_file data/EURUSD_ticks.csv \
+  --output_dir results_v1 \
+  --verbose
+
+
+SUCCESS CRITERIA
+================
+
+Phase 0 (Research - TODAY):
+  ✓ Framework defined
+  ✓ Hypothesis formulated
+  ✓ Pipeline implemented
+  ✓ Ready for data testing
+
+Phase 1 (Backtest - IF GO):
+  ✓ Win rate NOT required (can be 45%)
+  ✓ Max DD < 5% (REQUIRED)
+  ✓ Profit factor > 1.0 (REQUIRED)
+  ✓ Events > 100 (for statistical validity)
+
+Phase 2+ (OOS/Paper/Live):
+  ✓ Consistency check across time periods
+  ✓ Slippage model validation
+  ✓ Profitability proof
+
+
+COMMITMENT
+===========
+
+If research shows:
+  • NO-GO → ACCEPT FAILURE, STOP research, move on
+  • Weak GO → re-evaluate, don't force edge to work
+  • Strong GO → proceed to Phase 1 with frozen parameters
+
+This is NOT about winning. It's about finding REAL structure.
+Not curve-fit, not lucky, not single-year randomness.
+Honest hypothesis testing.
+
+
+CONTACT / NEXT
+===============
+
+This framework is ready to use with real MT5 data.
+
+Next steps:
+  1. Export EURUSD ticks from MT5 (2023-2025, full resolution)
+  2. Run tick_edge_scan.py
+  3. Check summary.json decision
+  4. If GO → Phase 1 backtest starts
+  5. If NO-GO → Revisit hypothesis or try new edge
+
+Time to decision: 5-10 minutes (once MT5 data is ready)

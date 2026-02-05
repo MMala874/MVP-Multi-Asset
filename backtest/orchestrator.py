@@ -31,6 +31,7 @@ STRATEGY_MAP = {
     "S3_TS_MOM_VOL_REGIME": "strategies.s3_ts_mom_vol_regime",
     "S3_TS_MOM_H1_FILTER": "strategies.s3_ts_mom_h1_filter",
     "S4_TREND_COND_MEAN_REVERSION": "strategies.s4_trend_cond_mean_reversion",
+    "S7_HTF_TREND_LTF_PULLBACK": "strategies.s7_htf_trend_ltf_pullback",
 }
 
 
@@ -388,6 +389,91 @@ def _apply_strategy_features(df: pd.DataFrame, spec: _StrategySpec, symbol: str)
         # Ensure H1 bias column exists (for backward compat if H1 not merged)
         if "trend_bias_h1" not in df:
             df["trend_bias_h1"] = np.nan
+    elif spec.name == "S7_HTF_TREND_LTF_PULLBACK":
+        # H4 trend bias (merged from H4), H1 trailing (merged from H1), M15 pullback entry
+        
+        # H4 parameters
+        ema_fast_h4 = int(spec.params.get("ema_fast_h4", 50))
+        ema_slow_h4 = int(spec.params.get("ema_slow_h4", 200))
+        adx_period_h4 = int(spec.params.get("adx_period_h4", 14))
+        adx_min_h4 = float(spec.params.get("adx_min_h4", 20.0))
+        
+        # H1 parameters
+        atr_period_h1 = int(spec.params.get("atr_period_h1", 14))
+        chandelier_window_h1 = int(spec.params.get("chandelier_window_h1", 22))
+        
+        # M15 parameters
+        ema_pullback_m15 = int(spec.params.get("ema_pullback_m15", 20))
+        ema_trend_m15 = int(spec.params.get("ema_trend_m15", 50))
+        atr_period_m15 = int(spec.params.get("atr_period_m15", 14))
+        slope_window_m15 = int(spec.params.get("slope_window_m15", 20))
+        
+        pip_size = PIP_SIZES.get(symbol, 0.0001)
+        
+        # ========== H4 FEATURES (MERGED VIA SHIFT(1)) ==========
+        if "ema_fast_h4" not in df:
+            df["ema_fast_h4"] = np.nan
+        if "ema_slow_h4" not in df:
+            df["ema_slow_h4"] = np.nan
+        if "adx_h4" not in df:
+            df["adx_h4"] = np.nan
+        
+        # Derive trend_bias_h4 from merged H4 features
+        if "trend_bias_h4" not in df:
+            df["trend_bias_h4"] = np.where(
+                (df["ema_fast_h4"] > df["ema_slow_h4"]) & (df["adx_h4"] > adx_min_h4),
+                1.0,  # LONG
+                np.where(
+                    (df["ema_fast_h4"] < df["ema_slow_h4"]) & (df["adx_h4"] > adx_min_h4),
+                    -1.0,  # SHORT
+                    0.0  # FLAT
+                )
+            )
+        
+        # ========== H1 FEATURES (MERGED VIA SHIFT(1), IN PIPS) ==========
+        if "atr_h1_pips" not in df:
+            df["atr_h1_pips"] = np.nan
+        
+        # Chandelier exit: high/low with ATR bands (used for trailing)
+        # Using atr_h1_pips (already in pips, need to convert back to price for chandelier)
+        if "chandelier_exit_h1" not in df:
+            if "atr_h1_pips" in df.columns and df["atr_h1_pips"].notna().any():
+                # Use H1 ATR in pips to compute chandelier (convert back to price)
+                rolling_high = df["high"].shift(1).rolling(window=chandelier_window_h1, min_periods=chandelier_window_h1).max()
+                rolling_low = df["low"].shift(1).rolling(window=chandelier_window_h1, min_periods=chandelier_window_h1).min()
+                pip_size = PIP_SIZES.get(symbol, 0.0001)
+                atr_price = df["atr_h1_pips"] * pip_size
+                df["chandelier_exit_h1"] = np.where(
+                    df["atr_h1_pips"].notna(),
+                    rolling_high - (3.0 * atr_price),  # Stop for shorts
+                    np.nan
+                )
+            else:
+                df["chandelier_exit_h1"] = np.nan
+        
+        # ========== M15 PULLBACK FEATURES ==========
+        # EMA pullback (fast, for entry detection)
+        if "ema_pullback" not in df:
+            df["ema_pullback"] = ema(df["close"], ema_pullback_m15)
+        
+        # EMA trend (slow, for direction confirmation)
+        if "ema_trend" not in df:
+            df["ema_trend"] = ema(df["close"], ema_trend_m15)
+        
+        # ATR M15
+        if "atr_m15" not in df:
+            df["atr_m15"] = atr(df, atr_period_m15)
+        
+        if "atr_m15_pips" not in df:
+            df["atr_m15_pips"] = df["atr_m15"] / pip_size
+        
+        # Pullback depth: distance from close to EMA pullback, normalized by ATR
+        if "pullback_depth" not in df:
+            df["pullback_depth"] = (df["close"] - df["ema_pullback"]).abs() / df["atr_m15"]
+        
+        # EMA slope M15 (trend confirmation)
+        if "ema_slope_m15" not in df:
+            df["ema_slope_m15"] = slope(df["ema_trend"], slope_window_m15)
     return df
 
 
@@ -579,6 +665,24 @@ def _run_scenario(
                             if high >= position["sl_price"]:
                                 exit_price_raw = position["sl_price"]
                 
+                # Check Z_EXIT for S4 mean-reversion (before TIME/EOD)
+                if exit_price_raw is None and position["strategy_id"] == "S4_TREND_COND_MEAN_REVERSION":
+                    try:
+                        z_value = float(df["mr_z"].iat[idx + 1])
+                        z_exit = float(config.strategies.params.get("S4_TREND_COND_MEAN_REVERSION", {}).get("z_exit", 0.2))
+                        
+                        should_z_exit = False
+                        if position["current_side"] == Side.LONG and z_value >= -z_exit:
+                            should_z_exit = True
+                        elif position["current_side"] == Side.SHORT and z_value <= z_exit:
+                            should_z_exit = True
+                        
+                        if should_z_exit:
+                            exit_price_raw = float(df["close"].iat[idx + 1])
+                    except (KeyError, ValueError, TypeError):
+                        # mr_z not available or invalid z_exit param, skip Z_EXIT
+                        pass
+                
                 # Check TIME stop (max hold bars exceeded)
                 if exit_price_raw is None:
                     held_bars = (idx + 1) - position["entry_idx"]
@@ -664,16 +768,48 @@ def _run_scenario(
                         if sl_hit: exit_reason = "SL"
                         elif tp_hit: exit_reason = "TP"
                         else:
-                            held_bars = (idx + 1) - position["entry_idx"]
-                            if held_bars >= config.risk.max_hold_bars:
-                                exit_reason = "TIME"
+                            # Check if this is a Z_EXIT (z-score reversion)
+                            if position["strategy_id"] == "S4_TREND_COND_MEAN_REVERSION":
+                                try:
+                                    z_value = float(df["mr_z"].iat[idx + 1])
+                                    z_exit = float(config.strategies.params.get("S4_TREND_COND_MEAN_REVERSION", {}).get("z_exit", 0.2))
+                                    if z_value >= -z_exit:
+                                        exit_reason = "Z_EXIT"
+                                    else:
+                                        held_bars = (idx + 1) - position["entry_idx"]
+                                        if held_bars >= config.risk.max_hold_bars:
+                                            exit_reason = "TIME"
+                                except (KeyError, ValueError, TypeError):
+                                    held_bars = (idx + 1) - position["entry_idx"]
+                                    if held_bars >= config.risk.max_hold_bars:
+                                        exit_reason = "TIME"
+                            else:
+                                held_bars = (idx + 1) - position["entry_idx"]
+                                if held_bars >= config.risk.max_hold_bars:
+                                    exit_reason = "TIME"
                     elif position["current_side"] == Side.SHORT:
                         if sl_hit: exit_reason = "SL"
                         elif tp_hit: exit_reason = "TP"
                         else:
-                            held_bars = (idx + 1) - position["entry_idx"]
-                            if held_bars >= config.risk.max_hold_bars:
-                                exit_reason = "TIME"
+                            # Check if this is a Z_EXIT (z-score reversion)
+                            if position["strategy_id"] == "S4_TREND_COND_MEAN_REVERSION":
+                                try:
+                                    z_value = float(df["mr_z"].iat[idx + 1])
+                                    z_exit = float(config.strategies.params.get("S4_TREND_COND_MEAN_REVERSION", {}).get("z_exit", 0.2))
+                                    if z_value <= z_exit:
+                                        exit_reason = "Z_EXIT"
+                                    else:
+                                        held_bars = (idx + 1) - position["entry_idx"]
+                                        if held_bars >= config.risk.max_hold_bars:
+                                            exit_reason = "TIME"
+                                except (KeyError, ValueError, TypeError):
+                                    held_bars = (idx + 1) - position["entry_idx"]
+                                    if held_bars >= config.risk.max_hold_bars:
+                                        exit_reason = "TIME"
+                            else:
+                                held_bars = (idx + 1) - position["entry_idx"]
+                                if held_bars >= config.risk.max_hold_bars:
+                                    exit_reason = "TIME"
                     
                     # Re-label SL as TRAIL if exit is profitable (stop moved into profit)
                     if exit_reason == "SL":

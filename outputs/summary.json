@@ -1,0 +1,95 @@
+{
+  "metadata": {
+    "n_ticks": 362000000,
+    "n_ticks_filtered": 20364691,
+    "n_ticks_dropped": "0",
+    "n_bars": 372498,
+    "n_events": 1721,
+    "ask_imputed_ratio": 0.0,
+    "date_range": {
+      "start": "2024-01-02 00:00:00",
+      "end": "2024-12-30 23:59:00"
+    }
+  },
+  "parameters": {
+    "bar_period_sec": 60,
+    "compression_duration_min": 5,
+    "comp_vol_pct": 15,
+    "comp_tick_pct": 25,
+    "comp_spread_std_pct": -1,
+    "expansion_vol_pct": 35,
+    "lookback_window_days": 2,
+    "min_years_analyzed": 5,
+    "min_events_per_year": 20,
+    "assumed_spread_pips": 1.0
+  },
+  "imputation": {
+    "ask_imputed_count": 0,
+    "ask_imputed_ratio": 0.0,
+    "median_spread_computed": null
+  },
+  "baseline": {
+    "forward_vol_5m": 7.305945825289809e-05,
+    "forward_range_5m": 0.0001290997883030628,
+    "forward_spread_mean_5m": 3.599454404065256e-05,
+    "forward_return_mean_5m": 0.0
+  },
+  "effect_sizes": {
+    "vol_ratio_5m": 0.3980886717862092,
+    "spread_ratio_5m": 2.517054096593198,
+    "vol_ratio_15m": 3.185264203415317e-05,
+    "spread_ratio_15m": 9.198456402751101e-05,
+    "vol_ratio_30m": 3.284752761980069e-05,
+    "spread_ratio_30m": 9.1373809499762e-05
+  },
+  "stability_per_year": {
+    "vol_5m": [
+      {
+        "year": "2024",
+        "effect_ratio": 0.3980886717862092,
+        "n_events": 1721
+      }
+    ],
+    "vol_15m": [
+      {
+        "year": "2024",
+        "effect_ratio": 3.185264203415317e-05,
+        "n_events": 1721
+      }
+    ],
+    "vol_30m": [
+      {
+        "year": "2024",
+        "effect_ratio": 3.284752761980069e-05,
+        "n_events": 1721
+      }
+    ]
+  },
+  "decision": {
+    "status": "INSUFFICIENT_DATA",
+    "reason": [
+      "vol_5m: Only 1 years analyzed (need 5)",
+      "vol_15m: Only 1 years analyzed (need 5)",
+      "vol_30m: Only 1 years analyzed (need 5)"
+    ],
+    "effect_sizes": {
+      "vol_ratio_5m": 0.3980886717862092,
+      "spread_ratio_5m": 2.517054096593198,
+      "vol_ratio_15m": 3.185264203415317e-05,
+      "spread_ratio_15m": 9.198456402751101e-05,
+      "vol_ratio_30m": 3.284752761980069e-05,
+      "spread_ratio_30m": 9.1373809499762e-05
+    },
+    "min_years_analyzed": 5,
+    "min_events_per_year": 20,
+    "vol_5m_n_years": 1,
+    "vol_5m_min_events_per_year": 20,
+    "vol_5m_years_below_threshold": 0,
+    "vol_15m_n_years": 1,
+    "vol_15m_min_events_per_year": 20,
+    "vol_15m_years_below_threshold": 0,
+    "vol_30m_n_years": 1,
+    "vol_30m_min_events_per_year": 20,
+    "vol_30m_years_below_threshold": 0
+  }
+}

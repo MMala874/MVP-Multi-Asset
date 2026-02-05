@@ -12,7 +12,15 @@ import pandas as pd
 from backtest import BacktestOrchestrator
 from backtest.orchestrator import STRATEGY_MAP
 from configs.loader import load_config
-from data.io import load_ohlc_csv, merge_h1_to_m15, prepare_h1_features
+from data.io import (
+    load_ohlc_csv,
+    merge_h1_to_m15,
+    merge_h1_to_m15_with_atr,
+    merge_h4_to_m15,
+    prepare_h1_features,
+    prepare_h1_features_with_atr,
+    prepare_h4_features,
+)
 
 
 _DEFAULT_METRICS = {
@@ -33,12 +41,21 @@ def _parse_args() -> argparse.Namespace:
         default="configs/examples/example_config.yaml",
         help="Path to the YAML config file.",
     )
+    # M15 execution data
     parser.add_argument("--eurusd", help="Path to EURUSD OHLC CSV (M15 execution).")
-    parser.add_argument("--eurusd_h1", help="Path to EURUSD H1 CSV (optional trend filter).")
     parser.add_argument("--gbpusd", help="Path to GBPUSD OHLC CSV.")
-    parser.add_argument("--gbpusd_h1", help="Path to GBPUSD H1 CSV (optional trend filter).")
     parser.add_argument("--usdjpy", help="Path to USDJPY OHLC CSV.")
+    
+    # H1 trend filter data (optional)
+    parser.add_argument("--eurusd_h1", help="Path to EURUSD H1 CSV (optional trend filter).")
+    parser.add_argument("--gbpusd_h1", help="Path to GBPUSD H1 CSV (optional trend filter).")
     parser.add_argument("--usdjpy_h1", help="Path to USDJPY H1 CSV (optional trend filter).")
+    
+    # H4 bias data (optional for S7)
+    parser.add_argument("--eurusd_h4", help="Path to EURUSD H4 CSV (optional for S7 HTF bias).")
+    parser.add_argument("--gbpusd_h4", help="Path to GBPUSD H4 CSV (optional for S7 HTF bias).")
+    parser.add_argument("--usdjpy_h4", help="Path to USDJPY H4 CSV (optional for S7 HTF bias).")
+    
     parser.add_argument("--out", default="runs/", help="Output directory for results.")
     args = parser.parse_args()
 
@@ -49,65 +66,105 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _load_symbols(args: argparse.Namespace, cfg) -> Dict[str, pd.DataFrame]:
-    """Load M15 data and optionally merge H1 filter using config-driven parameters."""
+    """Load M15 data and optionally merge H1/H4 features using config-driven parameters."""
     df_by_symbol: Dict[str, pd.DataFrame] = {}
     mapping = {
-        "EURUSD": (args.eurusd, args.eurusd_h1),
-        "GBPUSD": (args.gbpusd, args.gbpusd_h1),
-        "USDJPY": (args.usdjpy, args.usdjpy_h1),
+        "EURUSD": (args.eurusd, args.eurusd_h1, args.eurusd_h4),
+        "GBPUSD": (args.gbpusd, args.gbpusd_h1, args.gbpusd_h4),
+        "USDJPY": (args.usdjpy, args.usdjpy_h1, args.usdjpy_h4),
     }
     
-    # Check if any enabled strategy requires H1 merge by checking required_features()
+    # Check which strategies are enabled and what they require
     h1_needed = False
+    h4_needed = False
     h1_params = {}
+    h4_params = {}
     
     for strategy_id in cfg.strategies.enabled:
         try:
-            # Dynamically import strategy module
             module_path = STRATEGY_MAP.get(strategy_id)
             if module_path:
                 module = importlib.import_module(module_path)
                 if hasattr(module, "required_features"):
                     required_features = module.required_features()
-                    if "trend_bias_h1" in required_features:
+                    
+                    # Check for H1 requirement
+                    if any(feat in required_features for feat in ["trend_bias_h1", "atr_h1", "atr_h1_pips"]):
                         h1_needed = True
-                        # Extract H1 parameters from config for this strategy
                         strategy_params = cfg.strategies.params.get(strategy_id, {})
                         h1_params = {
                             "ema_fast": int(strategy_params.get("ema_fast_h1", 50)),
                             "ema_slow": int(strategy_params.get("ema_slow_h1", 200)),
                             "adx_th": float(strategy_params.get("adx_th_h1", 20.0)),
                             "adx_period": int(strategy_params.get("adx_period_h1", 14)),
+                            "atr_period": int(strategy_params.get("atr_period_h1", 14)),
                         }
-                        break
+                    
+                    # Check for H4 requirement
+                    if any(feat in required_features for feat in ["trend_bias_h4", "ema_fast_h4", "ema_slow_h4", "adx_h4"]):
+                        h4_needed = True
+                        strategy_params = cfg.strategies.params.get(strategy_id, {})
+                        h4_params = {
+                            "ema_fast": int(strategy_params.get("ema_fast_h4", 50)),
+                            "ema_slow": int(strategy_params.get("ema_slow_h4", 200)),
+                            "adx_period": int(strategy_params.get("adx_period_h4", 14)),
+                            "adx_min": float(strategy_params.get("adx_min_h4", 20.0)),
+                        }
         except (ImportError, AttributeError):
-            # Strategy module doesn't exist or doesn't have required_features
             pass
     
-    for symbol, (path_m15, path_h1) in mapping.items():
+    # Validate S7 requirements: if S7 enabled, BOTH H4 and H1 must be provided
+    if "S7_HTF_TREND_LTF_PULLBACK" in cfg.strategies.enabled:
+        h4_needed = True
+        h1_needed = True
+    
+    for symbol, (path_m15, path_h1, path_h4) in mapping.items():
         if path_m15:
             df_m15 = load_ohlc_csv(path_m15)
-            # Optionally merge H1 filter if a strategy needs it and H1 data provided
-            if h1_needed and path_h1:
+            
+            # Merge H4 features if needed
+            if h4_needed:
+                if not path_h4:
+                    raise ValueError(
+                        f"Strategy S7_HTF_TREND_LTF_PULLBACK requires --{symbol.lower()}_h4 to be provided"
+                    )
+                df_h4 = load_ohlc_csv(path_h4)
+                df_h4 = prepare_h4_features(
+                    df_h4,
+                    symbol=symbol,
+                    ema_fast=h4_params["ema_fast"],
+                    ema_slow=h4_params["ema_slow"],
+                    adx_period=h4_params["adx_period"],
+                    adx_min=h4_params["adx_min"],
+                )
+                df_m15 = merge_h4_to_m15(df_m15, df_h4)
+            
+            # Merge H1 features if needed
+            if h1_needed:
+                if not path_h1:
+                    raise ValueError(
+                        f"Strategy S7_HTF_TREND_LTF_PULLBACK requires --{symbol.lower()}_h1 to be provided"
+                    )
                 df_h1 = load_ohlc_csv(path_h1)
-                # Prepare H1 features with config-driven params
-                # prepare_h1_features handles shift(1) for no-lookahead internally
-                df_h1 = prepare_h1_features(
+                df_h1 = prepare_h1_features_with_atr(
                     df_h1,
+                    symbol=symbol,
                     ema_fast=h1_params["ema_fast"],
                     ema_slow=h1_params["ema_slow"],
                     adx_th=h1_params["adx_th"],
                     adx_period=h1_params["adx_period"],
+                    atr_period=h1_params["atr_period"],
                 )
-                df_m15 = merge_h1_to_m15(df_m15, df_h1)
+                df_m15 = merge_h1_to_m15_with_atr(df_m15, df_h1)
                 
-                # Validate that trend_bias_h1 exists and is not all NaN
-                if "trend_bias_h1" not in df_m15.columns:
-                    raise ValueError(f"After H1 merge for {symbol}: 'trend_bias_h1' column missing!")
-                if df_m15["trend_bias_h1"].isna().all():
-                    print(f"WARNING: {symbol}: 'trend_bias_h1' is all-NaN after merge. H1 data may be misaligned.")
+                # Validate
+                if "atr_h1_pips" not in df_m15.columns:
+                    raise ValueError(f"After H1 merge for {symbol}: 'atr_h1_pips' column missing!")
+                if df_m15["atr_h1_pips"].isna().all():
+                    print(f"WARNING: {symbol}: 'atr_h1_pips' is all-NaN after merge. H1 data may be misaligned.")
             
             df_by_symbol[symbol] = df_m15
+    
     return df_by_symbol
 
 
