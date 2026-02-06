@@ -69,7 +69,13 @@ def _build_rolling_folds(index: pd.DatetimeIndex, train_years: int = 3, test_yea
 
 
 def _feature_columns(dataset: pd.DataFrame) -> list[str]:
-    excluded = {"label", "bars_to_resolution", "outcome_type", "timestamp"}
+    excluded = {
+        "label",
+        "bars_to_resolution",
+        "outcome_type",
+        "timestamp",
+        "time",
+    }
     cols = [c for c in dataset.columns if c not in excluded]
     return cols
 
@@ -132,7 +138,14 @@ def run_conditional_edge_analysis(
         raise ValueError("Dataset must contain a 'label' column")
 
     feature_cols = _feature_columns(data)
-    x_all = data[feature_cols].astype(float)
+    x_all = data[feature_cols].apply(pd.to_numeric, errors="coerce")
+    x_all = x_all.dropna(axis=1, how="all")
+    if x_all.empty:
+        raise ValueError("Dataset has no usable numeric feature columns after preprocessing")
+
+    if x_all.isna().any().any():
+        x_all = x_all.fillna(x_all.median(numeric_only=True))
+
     y_all = data["label"].astype(int)
 
     folds = _build_rolling_folds(data.index, train_years=3, test_years=1, purge_bars=10)
