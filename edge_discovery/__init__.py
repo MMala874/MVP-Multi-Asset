@@ -10,4 +10,7 @@ __all__ = [
     "compute_event_flags",
     "compute_normalized_features",
     "label_event_bars",
+    "run_conditional_edge_analysis",
 ]
+
+from edge_discovery.conditional_edge import run_conditional_edge_analysis
