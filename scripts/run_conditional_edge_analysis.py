@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -22,8 +23,14 @@ def main():
     ap.add_argument("--dataset", required=True, help="Path to research_dataset.csv")
     ap.add_argument("--output", default="outputs/conditional_edge_report.json", help="Output report json")
     ap.add_argument("--no-xgboost", action="store_true", help="Disable XGBoost if not installed")
-    ap.add_argument("--n_jobs", type=int, default=0, help="CPU parallelism (0=auto, 1=single thread)")
+    default_n_jobs = max(1, (os.cpu_count() or 1) - 2)
+    ap.add_argument("--n_jobs", type=int, default=default_n_jobs, help="CPU parallelism")
     args = ap.parse_args()
+
+    args.n_jobs = max(1, int(args.n_jobs))
+    for env_key in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+        if env_key not in os.environ:
+            os.environ[env_key] = str(args.n_jobs)
 
     ds_path = Path(args.dataset)
     out_path = Path(args.output)
