@@ -51,8 +51,11 @@ def _build_rolling_folds(index: pd.DatetimeIndex, train_years: int = 3, test_yea
         if train_mask.sum() == 0 or test_mask.sum() == 0:
             continue
 
-        train_idx = np.flatnonzero(train_mask.to_numpy())
-        test_idx = np.flatnonzero(test_mask.to_numpy())
+        train_mask_arr = np.asarray(train_mask)
+        test_mask_arr = np.asarray(test_mask)
+
+        train_idx = np.flatnonzero(train_mask_arr)
+        test_idx = np.flatnonzero(test_mask_arr)
 
         first_test = int(test_idx.min())
         last_test = int(test_idx.max())
