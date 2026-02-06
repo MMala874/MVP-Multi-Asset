@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 from sklearn.base import clone
-from sklearn.ensemble import GradientBoostingClassifier, HistGradientBoostingClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 
@@ -96,7 +96,12 @@ def _feature_columns(dataset: pd.DataFrame) -> list[str]:
     return cols
 
 
-def _build_models(include_xgboost: bool = True, n_jobs: int | None = None) -> dict[str, Any]:
+def _build_models(
+    include_xgboost: bool = True,
+    include_sklearn_gb: bool = False,
+    n_jobs: int | None = None,
+    xgb_device: str = "cpu",
+) -> dict[str, Any]:
     models: dict[str, Any] = {
         "logistic_regression": LogisticRegression(
             solver="saga",
@@ -104,14 +109,16 @@ def _build_models(include_xgboost: bool = True, n_jobs: int | None = None) -> di
             random_state=42,
             n_jobs=n_jobs,
         ),
-        "gradient_boosting_d3": GradientBoostingClassifier(max_depth=3, learning_rate=0.05, n_estimators=200, random_state=42),
-        "hist_gradient_boosting_d3": HistGradientBoostingClassifier(
+    }
+
+    if include_sklearn_gb:
+        models["hist_gb_d3"] = HistGradientBoostingClassifier(
             max_depth=3,
             learning_rate=0.05,
-            max_iter=250,
+            max_iter=300,
+            early_stopping=True,
             random_state=42,
-        ),
-    }
+        )
 
     if include_xgboost:
         try:
@@ -119,17 +126,22 @@ def _build_models(include_xgboost: bool = True, n_jobs: int | None = None) -> di
         except ImportError as exc:
             raise ImportError("XGBoost requested but package 'xgboost' is not installed") from exc
 
-        models["xgboost_d3"] = XGBClassifier(
-            n_estimators=250,
-            learning_rate=0.03,
-            max_depth=3,
-            subsample=0.9,
-            colsample_bytree=0.9,
-            objective="binary:logistic",
-            eval_metric="logloss",
-            random_state=42,
-            n_jobs=n_jobs,
-        )
+        xgb_params: dict[str, Any] = {
+            "n_estimators": 350,
+            "learning_rate": 0.03,
+            "max_depth": 3,
+            "subsample": 0.9,
+            "colsample_bytree": 0.9,
+            "objective": "binary:logistic",
+            "eval_metric": "logloss",
+            "random_state": 42,
+            "n_jobs": n_jobs,
+            "tree_method": "hist",
+        }
+        if xgb_device.lower() in {"cuda", "gpu"}:
+            xgb_params["device"] = "cuda"
+
+        models["xgboost_d3"] = XGBClassifier(**xgb_params)
 
     return models
 
@@ -215,6 +227,8 @@ def run_conditional_edge_analysis(
     unstable_feature_min_fold_frac: float = 0.6,
     include_xgboost: bool = True,
     n_jobs: int | None = None,
+    include_sklearn_gb: bool = False,
+    xgb_device: str = "cpu",
 ) -> dict[str, Any]:
     if n_jobs in (None, 0):
         import os
@@ -239,7 +253,12 @@ def run_conditional_edge_analysis(
     if not folds:
         raise ValueError("No rolling 3y/1y folds available in the provided dataset")
 
-    models = _build_models(include_xgboost=include_xgboost, n_jobs=n_jobs)
+    models = _build_models(
+        include_xgboost=include_xgboost,
+        include_sklearn_gb=include_sklearn_gb,
+        n_jobs=n_jobs,
+        xgb_device=xgb_device,
+    )
 
     jobs: list[tuple[int, int, str, Any, pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, float]] = []
     for fold_id, (train_idx, test_idx, test_year) in enumerate(folds, start=1):

@@ -23,6 +23,8 @@ def main():
     ap.add_argument("--dataset", required=True, help="Path to research_dataset.csv")
     ap.add_argument("--output", default="outputs/conditional_edge_report.json", help="Output report json")
     ap.add_argument("--no-xgboost", action="store_true", help="Disable XGBoost if not installed")
+    ap.add_argument("--use-sklearn-gb", action="store_true", help="Enable sklearn HistGradientBoosting (optional)")
+    ap.add_argument("--xgb_device", default="cpu", choices=["cpu", "cuda", "gpu"], help="XGBoost device")
     default_n_jobs = max(1, (os.cpu_count() or 1) - 2)
     ap.add_argument("--n_jobs", type=int, default=default_n_jobs, help="CPU parallelism")
     args = ap.parse_args()
@@ -41,6 +43,8 @@ def main():
         ds,
         include_xgboost=not args.no_xgboost,
         n_jobs=args.n_jobs,
+        include_sklearn_gb=bool(args.use_sklearn_gb),
+        xgb_device=args.xgb_device,
     )
 
     out_payload = {
