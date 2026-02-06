@@ -18,18 +18,22 @@ def _to_records(df: pd.DataFrame) -> list[dict]:
     return out.to_dict(orient="records")
 
 
+def _parse_models(raw: str) -> list[str]:
+    return [m.strip().lower() for m in raw.split(",") if m.strip()]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset", required=True, help="Path to research_dataset.csv")
     ap.add_argument("--output", default="outputs/conditional_edge_report.json", help="Output report json")
-    ap.add_argument("--no-xgboost", action="store_true", help="Disable XGBoost if not installed")
-    ap.add_argument("--use-sklearn-gb", action="store_true", help="Enable sklearn HistGradientBoosting (optional)")
-    ap.add_argument("--xgb_device", default="cpu", choices=["cpu", "cuda", "gpu"], help="XGBoost device")
-    default_n_jobs = max(1, (os.cpu_count() or 1) - 2)
-    ap.add_argument("--n_jobs", type=int, default=default_n_jobs, help="CPU parallelism")
+    ap.add_argument("--n_jobs", type=int, default=(os.cpu_count() or 1), help="CPU threads for XGBoost nthread")
+    ap.add_argument("--models", default="xgb,logreg", help="Comma-separated model list to run (supported: xgb,logreg)")
     args = ap.parse_args()
 
     args.n_jobs = max(1, int(args.n_jobs))
+    detected_cpus = os.cpu_count() or 1
+    print(f"Detected CPU count={detected_cpus}, using n_jobs={args.n_jobs}")
+
     for env_key in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
         if env_key not in os.environ:
             os.environ[env_key] = str(args.n_jobs)
@@ -41,10 +45,8 @@ def main():
     ds = pd.read_csv(ds_path)
     report = run_conditional_edge_analysis(
         ds,
-        include_xgboost=not args.no_xgboost,
         n_jobs=args.n_jobs,
-        include_sklearn_gb=bool(args.use_sklearn_gb),
-        xgb_device=args.xgb_device,
+        models=_parse_models(args.models),
     )
 
     out_payload = {
@@ -55,6 +57,8 @@ def main():
         "top_stable_feature_interactions": _to_records(report["top_stable_feature_interactions"]),
         "regions_consistent_ptp_gt_055": _to_records(report["regions_consistent_ptp_gt_055"]),
         "event_types_persistent_skew": _to_records(report["event_types_persistent_skew"]),
+        "fold_lift_vs_baseline": _to_records(report["fold_performance"][["fold_id", "test_year", "model", "baseline_tp_rate", "region_tp_rate", "lift_abs", "lift_ratio", "region_coverage", "auc"]]),
+        "xgb_top_features_by_fold": _to_records(report["xgb_top_features_by_fold"]),
     }
 
     out_path.write_text(json.dumps(out_payload, indent=2), encoding="utf-8")
