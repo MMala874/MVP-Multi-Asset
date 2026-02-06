@@ -54,6 +54,7 @@ backtest/metrics.py
 backtest/orchestrator.py
 backtest/report.py
 backtest/trade_log.py
+check_dataset.py
 CHECKLIST_EDGE_FIRST_REFACTORING.md
 configs/__init__.py
 configs/examples/config_s1_breakout_test.yaml
@@ -105,6 +106,7 @@ montecarlo/__init__.py
 montecarlo/mc1_block_bootstrap.py
 montecarlo/mc2_cost_noise.py
 MT5_STREAMING_OPTIMIZATION_COMPLETE.md
+outputs/research_dataset.parquet
 outputs/summary.json
 PHASE3_CHECKLIST.md
 PHASE3_COMPLETE.md
@@ -136,6 +138,7 @@ S7_QUICKSTART.py
 S8_IMPLEMENTATION_BLUEPRINT.md
 SCENARIO_FILTERING_SUMMARY.md
 scripts/__main__.py
+scripts/check_dataset.py
 scripts/example_structural_edge_dataset.py
 scripts/example_tick_edge_workflow.py
 scripts/QUICKSTART_MT5_STREAMING_CLEAN.py
@@ -309,6 +312,220 @@ def to_pips(symbol: str, price_delta: float) -> float:
 
 def to_price(symbol: str, pips: float) -> float:
     return pips * pip_size(symbol)
+
+================
+File: desk_types/__init__.py
+================
+"""Type definitions for a systematic trading desk."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
+from typing import Any, Dict, Optional
+
+
+class Side(str, Enum):
+    LONG = "LONG"
+    SHORT = "SHORT"
+    FLAT = "FLAT"
+
+
+class OrderType(str, Enum):
+    MARKET = "MARKET"
+    STOP = "STOP"
+    LIMIT = "LIMIT"
+
+
+class Scenario(str, Enum):
+    A = "A"
+    B = "B"
+    C = "C"
+
+
+class SystemState(str, Enum):
+    RUNNING = "RUNNING"
+    DEGRADED = "DEGRADED"
+    SAFE_MODE = "SAFE_MODE"
+    HALTED = "HALTED"
+
+
+def _serialize_datetime(value: datetime) -> str:
+    return value.isoformat()
+
+
+def _deserialize_datetime(value: str) -> datetime:
+    return datetime.fromisoformat(value)
+
+
+@dataclass(frozen=True)
+class SignalIntent:
+    strategy_id: str
+    symbol: str
+    side: Side
+    signal_time: datetime
+    sl_points: Optional[float]
+    tp_points: Optional[float]
+    tags: Dict[str, str]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "strategy_id": self.strategy_id,
+            "symbol": self.symbol,
+            "side": self.side.value,
+            "signal_time": _serialize_datetime(self.signal_time),
+            "sl_points": self.sl_points,
+            "tp_points": self.tp_points,
+            "tags": dict(self.tags),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SignalIntent":
+        return cls(
+            strategy_id=data["strategy_id"],
+            symbol=data["symbol"],
+            side=Side(data["side"]),
+            signal_time=_deserialize_datetime(data["signal_time"]),
+            sl_points=data.get("sl_points"),
+            tp_points=data.get("tp_points"),
+            tags=dict(data.get("tags", {})),
+        )
+
+
+@dataclass(frozen=True)
+class OrderIntent:
+    strategy_id: str
+    symbol: str
+    side: Side
+    order_type: OrderType
+    qty: float
+    created_time: datetime
+    sl_points: Optional[float]
+    tp_points: Optional[float]
+    meta: Dict[str, str]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "strategy_id": self.strategy_id,
+            "symbol": self.symbol,
+            "side": self.side.value,
+            "order_type": self.order_type.value,
+            "qty": self.qty,
+            "created_time": _serialize_datetime(self.created_time),
+            "sl_points": self.sl_points,
+            "tp_points": self.tp_points,
+            "meta": dict(self.meta),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "OrderIntent":
+        return cls(
+            strategy_id=data["strategy_id"],
+            symbol=data["symbol"],
+            side=Side(data["side"]),
+            order_type=OrderType(data["order_type"]),
+            qty=float(data["qty"]),
+            created_time=_deserialize_datetime(data["created_time"]),
+            sl_points=data.get("sl_points"),
+            tp_points=data.get("tp_points"),
+            meta=dict(data.get("meta", {})),
+        )
+
+
+@dataclass(frozen=True)
+class Fill:
+    order_id: str
+    symbol: str
+    side: Side
+    qty: float
+    fill_time: datetime
+    fill_price: float
+    spread_pips: float
+    slippage_pips: float
+    scenario: Scenario
+    meta: Dict[str, str]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "order_id": self.order_id,
+            "symbol": self.symbol,
+            "side": self.side.value,
+            "qty": self.qty,
+            "fill_time": _serialize_datetime(self.fill_time),
+            "fill_price": self.fill_price,
+            "spread_pips": self.spread_pips,
+            "slippage_pips": self.slippage_pips,
+            "scenario": self.scenario.value,
+            "meta": dict(self.meta),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Fill":
+        return cls(
+            order_id=data["order_id"],
+            symbol=data["symbol"],
+            side=Side(data["side"]),
+            qty=float(data["qty"]),
+            fill_time=_deserialize_datetime(data["fill_time"]),
+            fill_price=float(data["fill_price"]),
+            spread_pips=float(data["spread_pips"]),
+            slippage_pips=float(data["slippage_pips"]),
+            scenario=Scenario(data["scenario"]),
+            meta=dict(data.get("meta", {})),
+        )
+
+
+@dataclass(frozen=True)
+class Position:
+    position_id: str
+    symbol: str
+    side: Side
+    qty: float
+    avg_price: float
+    open_time: datetime
+    strategy_id: str
+    magic_number: int
+    meta: Dict[str, str]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "position_id": self.position_id,
+            "symbol": self.symbol,
+            "side": self.side.value,
+            "qty": self.qty,
+            "avg_price": self.avg_price,
+            "open_time": _serialize_datetime(self.open_time),
+            "strategy_id": self.strategy_id,
+            "magic_number": self.magic_number,
+            "meta": dict(self.meta),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Position":
+        return cls(
+            position_id=data["position_id"],
+            symbol=data["symbol"],
+            side=Side(data["side"]),
+            qty=float(data["qty"]),
+            avg_price=float(data["avg_price"]),
+            open_time=_deserialize_datetime(data["open_time"]),
+            strategy_id=data["strategy_id"],
+            magic_number=int(data["magic_number"]),
+            meta=dict(data.get("meta", {})),
+        )
+
+
+__all__ = [
+    "Side",
+    "OrderType",
+    "Scenario",
+    "SystemState",
+    "SignalIntent",
+    "OrderIntent",
+    "Fill",
+    "Position",
+]
 
 ================
 File: execution/__init__.py
@@ -500,6 +717,49 @@ def _normalize_position(position: Any) -> Dict[str, Any]:
 
 
 __all__ = ["reconcile_positions"]
+
+================
+File: live/state_machine.py
+================
+from __future__ import annotations
+
+from desk_types import SystemState
+
+
+class SystemStateMachine:
+    def __init__(self, max_execution_errors: int) -> None:
+        self._state = SystemState.RUNNING
+        self._max_execution_errors = max_execution_errors
+        self._execution_errors = 0
+
+    @property
+    def state(self) -> SystemState:
+        return self._state
+
+    @property
+    def execution_errors(self) -> int:
+        return self._execution_errors
+
+    def record_execution_error(self) -> SystemState:
+        self._execution_errors += 1
+        if self._execution_errors >= self._max_execution_errors:
+            self._state = SystemState.HALTED
+        elif self._state == SystemState.RUNNING:
+            self._state = SystemState.DEGRADED
+        return self._state
+
+    def record_reconcile_mismatch(self) -> SystemState:
+        if self._state != SystemState.HALTED:
+            self._state = SystemState.SAFE_MODE
+        return self._state
+
+    def record_dd_flags(self, *, day_dd_breached: bool, week_dd_breached: bool) -> SystemState:
+        if day_dd_breached or week_dd_breached:
+            self._state = SystemState.HALTED
+        return self._state
+
+
+__all__ = ["SystemStateMachine"]
 
 ================
 File: monitoring/__init__.py
@@ -895,6 +1155,238 @@ from .conflict import resolve_conflicts
 from .dd_guard import DDGuard, DDStatus
 
 __all__ = ["RiskAllocator", "resolve_conflicts", "DDGuard", "DDStatus"]
+
+================
+File: risk/_types.py
+================
+"""Re-export risk types from the canonical desk_types modules."""
+
+from __future__ import annotations
+
+from desk_types import Fill, OrderIntent, OrderType, Position, Scenario, SignalIntent, Side, SystemState
+
+__all__ = [
+    "Fill",
+    "OrderIntent",
+    "OrderType",
+    "Position",
+    "Scenario",
+    "SignalIntent",
+    "Side",
+    "SystemState",
+]
+
+================
+File: risk/allocator.py
+================
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Dict, List, TYPE_CHECKING
+
+from desk_types import OrderIntent, OrderType, SignalIntent
+
+if TYPE_CHECKING:
+    from configs.models import Config
+
+
+@dataclass
+class AllocationState:
+    prices: Dict[str, float]
+    exposure_by_symbol: Dict[str, float]
+    exposure_total: float
+    risk_multiplier: float
+    risk_multiplier_by_strategy: Dict[str, float]
+
+
+def _build_state(state: object | None) -> AllocationState:
+    if state is None:
+        state_dict: Dict[str, object] = {}
+    elif isinstance(state, dict):
+        state_dict = state
+    else:
+        state_dict = state.__dict__
+
+    prices = dict(state_dict.get("prices", {}))
+    exposure_by_symbol = dict(state_dict.get("exposure_by_symbol", {}))
+    exposure_total = float(state_dict.get("exposure_total", 0.0))
+    risk_multiplier = float(state_dict.get("risk_multiplier", 1.0))
+    risk_multiplier_by_strategy = dict(state_dict.get("risk_multiplier_by_strategy", {}))
+    return AllocationState(
+        prices=prices,
+        exposure_by_symbol=exposure_by_symbol,
+        exposure_total=exposure_total,
+        risk_multiplier=risk_multiplier,
+        risk_multiplier_by_strategy=risk_multiplier_by_strategy,
+    )
+
+
+class RiskAllocator:
+    def __init__(self, config: "Config") -> None:
+        self._config = config
+
+    def allocate(self, signals: List[SignalIntent], state: object | None) -> List[OrderIntent]:
+        caps = self._config.risk.caps
+        state_view = _build_state(state)
+        allocated: List[OrderIntent] = []
+        risk_by_strategy: Dict[str, float] = {}
+        risk_by_symbol: Dict[str, float] = {}
+        exposure_total = state_view.exposure_total
+
+        for signal in signals:
+            if signal.sl_points is None:
+                continue
+            if signal.sl_points <= 0:
+                continue
+
+            risk_multiplier = _resolve_risk_multiplier(signal, state_view)
+            risk_amount = self._config.risk.r_base * risk_multiplier
+            if risk_amount <= 0:
+                continue
+
+            sl_distance_value = signal.sl_points
+            qty = risk_amount / sl_distance_value
+
+            if not _within_caps(
+                signal,
+                risk_amount,
+                qty,
+                risk_by_strategy,
+                risk_by_symbol,
+                caps.per_strategy,
+                caps.per_symbol,
+                caps.usd_exposure_cap,
+                state_view,
+                exposure_total,
+            ):
+                continue
+
+            order = OrderIntent(
+                strategy_id=signal.strategy_id,
+                symbol=signal.symbol,
+                side=signal.side,
+                order_type=OrderType.MARKET,
+                qty=qty,
+                created_time=datetime.utcnow(),
+                sl_points=signal.sl_points,
+                tp_points=signal.tp_points,
+                meta={"risk_multiplier": f"{risk_multiplier:.4f}"},
+            )
+            allocated.append(order)
+            risk_by_strategy[signal.strategy_id] = risk_by_strategy.get(signal.strategy_id, 0.0) + risk_amount
+            risk_by_symbol[signal.symbol] = risk_by_symbol.get(signal.symbol, 0.0) + risk_amount
+            exposure_total += _estimate_usd_exposure(qty, signal.symbol, state_view)
+
+        return allocated
+
+
+def _resolve_risk_multiplier(signal: SignalIntent, state_view: AllocationState) -> float:
+    tag_value = signal.tags.get("risk_multiplier")
+    if tag_value is not None:
+        try:
+            return float(tag_value)
+        except ValueError:
+            return state_view.risk_multiplier
+
+    if signal.strategy_id in state_view.risk_multiplier_by_strategy:
+        return float(state_view.risk_multiplier_by_strategy[signal.strategy_id])
+
+    return state_view.risk_multiplier
+
+
+def _estimate_usd_exposure(qty: float, symbol: str, state_view: AllocationState) -> float:
+    price = float(state_view.prices.get(symbol, 1.0))
+    return abs(qty) * price
+
+
+def _within_caps(
+    signal: SignalIntent,
+    risk_amount: float,
+    qty: float,
+    risk_by_strategy: Dict[str, float],
+    risk_by_symbol: Dict[str, float],
+    per_strategy_cap: float,
+    per_symbol_cap: float,
+    usd_exposure_cap: float,
+    state_view: AllocationState,
+    exposure_total: float,
+) -> bool:
+    next_strategy = risk_by_strategy.get(signal.strategy_id, 0.0) + risk_amount
+    if next_strategy > per_strategy_cap:
+        return False
+
+    next_symbol = risk_by_symbol.get(signal.symbol, 0.0) + risk_amount
+    if next_symbol > per_symbol_cap:
+        return False
+
+    next_exposure_total = exposure_total + _estimate_usd_exposure(qty, signal.symbol, state_view)
+    if next_exposure_total > usd_exposure_cap:
+        return False
+
+    return True
+
+
+__all__ = ["RiskAllocator"]
+
+================
+File: risk/conflict.py
+================
+from __future__ import annotations
+
+from typing import List
+
+from desk_types import Side, SignalIntent
+
+
+def resolve_conflicts(
+    signals: List[SignalIntent],
+    policy: str,
+    priority_order: List[str] | None,
+) -> List[SignalIntent]:
+    if policy == "priority":
+        if not priority_order:
+            return list(signals)
+        return _resolve_priority(signals, priority_order)
+    if policy == "netting":
+        return _resolve_netting(signals)
+    raise ValueError(f"Unknown conflict policy: {policy}")
+
+
+def _resolve_priority(signals: List[SignalIntent], priority_order: List[str]) -> List[SignalIntent]:
+    priority_map = {strategy_id: rank for rank, strategy_id in enumerate(priority_order)}
+    by_symbol: dict[str, List[SignalIntent]] = {}
+    for signal in signals:
+        by_symbol.setdefault(signal.symbol, []).append(signal)
+
+    filtered: List[SignalIntent] = []
+    for symbol, symbol_signals in by_symbol.items():
+        if len(symbol_signals) == 1:
+            filtered.extend(symbol_signals)
+            continue
+
+        symbol_signals.sort(key=lambda item: priority_map.get(item.strategy_id, len(priority_map)))
+        filtered.append(symbol_signals[0])
+
+    return filtered
+
+
+def _resolve_netting(signals: List[SignalIntent]) -> List[SignalIntent]:
+    by_symbol: dict[str, List[SignalIntent]] = {}
+    for signal in signals:
+        by_symbol.setdefault(signal.symbol, []).append(signal)
+
+    filtered: List[SignalIntent] = []
+    for symbol, symbol_signals in by_symbol.items():
+        sides = {signal.side for signal in symbol_signals}
+        if len(sides) > 1 and Side.LONG in sides and Side.SHORT in sides:
+            continue
+        filtered.extend(symbol_signals)
+
+    return filtered
+
+
+__all__ = ["resolve_conflicts"]
 
 ================
 File: risk/dd_guard.py
@@ -1328,6 +1820,69 @@ def test_reconcile_detects_mismatch() -> None:
     assert diffs[0]["suggestion"] == "SAFE_MODE"
 
 ================
+File: tests/test_risk.py
+================
+from __future__ import annotations
+
+from datetime import datetime
+from types import SimpleNamespace
+
+from desk_types import Side, SignalIntent
+from risk.allocator import RiskAllocator
+from risk.conflict import resolve_conflicts
+
+
+def _signal(strategy_id: str, symbol: str, side: Side, sl_points: float | None) -> SignalIntent:
+    return SignalIntent(
+        strategy_id=strategy_id,
+        symbol=symbol,
+        side=side,
+        signal_time=datetime(2024, 1, 1, 0, 0, 0),
+        sl_points=sl_points,
+        tp_points=None,
+        tags={},
+    )
+
+
+def _allocator(r_base: float, per_strategy: float, per_symbol: float, usd_cap: float) -> RiskAllocator:
+    caps = SimpleNamespace(
+        per_strategy=per_strategy,
+        per_symbol=per_symbol,
+        usd_exposure_cap=usd_cap,
+    )
+    risk = SimpleNamespace(r_base=r_base, caps=caps)
+    config = SimpleNamespace(risk=risk)
+    return RiskAllocator(config)
+
+
+def test_conflict_priority() -> None:
+    signals = [
+        _signal("S1", "EURUSD", Side.LONG, 10.0),
+        _signal("S2", "EURUSD", Side.SHORT, 12.0),
+    ]
+    filtered = resolve_conflicts(signals, policy="priority", priority_order=["S2", "S1"])
+    assert len(filtered) == 1
+    assert filtered[0].strategy_id == "S2"
+    assert filtered[0].side == Side.SHORT
+
+
+def test_caps_applied() -> None:
+    allocator = _allocator(r_base=0.01, per_strategy=0.01, per_symbol=0.02, usd_cap=100000)
+    signals = [
+        _signal("S1", "EURUSD", Side.LONG, 10.0),
+        _signal("S1", "EURUSD", Side.LONG, 10.0),
+    ]
+    orders = allocator.allocate(signals, state=None)
+    assert len(orders) == 1
+
+
+def test_allocator_no_order_without_sl() -> None:
+    allocator = _allocator(r_base=0.01, per_strategy=0.05, per_symbol=0.05, usd_cap=100000)
+    signals = [_signal("S1", "EURUSD", Side.LONG, None)]
+    orders = allocator.allocate(signals, state=None)
+    assert orders == []
+
+================
 File: tests/test_state_machine.py
 ================
 from live.state_machine import SystemStateMachine
@@ -1349,6 +1904,179 @@ def test_state_transitions() -> None:
 
     machine.record_dd_flags(day_dd_breached=True, week_dd_breached=False)
     assert machine.state.value == "HALTED"
+
+================
+File: tests/test_types.py
+================
+from dataclasses import FrozenInstanceError
+from datetime import datetime
+
+import pytest
+
+from desk_types import (
+    Fill,
+    OrderIntent,
+    OrderType,
+    Position,
+    Scenario,
+    Side,
+    SignalIntent,
+    SystemState,
+)
+
+
+def _sample_datetime() -> datetime:
+    return datetime(2024, 1, 2, 3, 4, 5)
+
+
+def test_signal_intent_roundtrip():
+    original = SignalIntent(
+        strategy_id="strat-1",
+        symbol="EURUSD",
+        side=Side.LONG,
+        signal_time=_sample_datetime(),
+        sl_points=12.5,
+        tp_points=25.0,
+        tags={"regime": "trend", "reason": "breakout"},
+    )
+    payload = original.to_dict()
+    restored = SignalIntent.from_dict(payload)
+    assert restored == original
+
+
+def test_order_intent_roundtrip():
+    original = OrderIntent(
+        strategy_id="strat-2",
+        symbol="USDJPY",
+        side=Side.SHORT,
+        order_type=OrderType.LIMIT,
+        qty=1.25,
+        created_time=_sample_datetime(),
+        sl_points=None,
+        tp_points=30.0,
+        meta={"client": "desk"},
+    )
+    payload = original.to_dict()
+    restored = OrderIntent.from_dict(payload)
+    assert restored == original
+
+
+def test_fill_roundtrip():
+    original = Fill(
+        order_id="order-99",
+        symbol="GBPUSD",
+        side=Side.LONG,
+        qty=3.5,
+        fill_time=_sample_datetime(),
+        fill_price=1.2345,
+        spread_pips=0.2,
+        slippage_pips=-0.1,
+        scenario=Scenario.B,
+        meta={"venue": "sim"},
+    )
+    payload = original.to_dict()
+    restored = Fill.from_dict(payload)
+    assert restored == original
+
+
+def test_position_roundtrip():
+    original = Position(
+        position_id="pos-7",
+        symbol="XAUUSD",
+        side=Side.FLAT,
+        qty=0.0,
+        avg_price=0.0,
+        open_time=_sample_datetime(),
+        strategy_id="strat-3",
+        magic_number=42,
+        meta={"note": "closed"},
+    )
+    payload = original.to_dict()
+    restored = Position.from_dict(payload)
+    assert restored == original
+
+
+@pytest.mark.parametrize(
+    "instance,field, value",
+    [
+        (
+            SignalIntent(
+                strategy_id="strat-1",
+                symbol="EURUSD",
+                side=Side.LONG,
+                signal_time=_sample_datetime(),
+                sl_points=None,
+                tp_points=None,
+                tags={},
+            ),
+            "symbol",
+            "USDCHF",
+        ),
+        (
+            OrderIntent(
+                strategy_id="strat-2",
+                symbol="USDJPY",
+                side=Side.SHORT,
+                order_type=OrderType.MARKET,
+                qty=1.0,
+                created_time=_sample_datetime(),
+                sl_points=None,
+                tp_points=None,
+                meta={},
+            ),
+            "qty",
+            2.0,
+        ),
+        (
+            Fill(
+                order_id="order-99",
+                symbol="GBPUSD",
+                side=Side.LONG,
+                qty=3.5,
+                fill_time=_sample_datetime(),
+                fill_price=1.2345,
+                spread_pips=0.2,
+                slippage_pips=-0.1,
+                scenario=Scenario.A,
+                meta={},
+            ),
+            "fill_price",
+            1.5,
+        ),
+        (
+            Position(
+                position_id="pos-7",
+                symbol="XAUUSD",
+                side=Side.FLAT,
+                qty=0.0,
+                avg_price=0.0,
+                open_time=_sample_datetime(),
+                strategy_id="strat-3",
+                magic_number=42,
+                meta={},
+            ),
+            "magic_number",
+            99,
+        ),
+    ],
+)
+def test_dataclasses_are_frozen(instance, field, value):
+    with pytest.raises(FrozenInstanceError):
+        setattr(instance, field, value)
+
+
+@pytest.mark.parametrize(
+    "enum_type, invalid_value",
+    [
+        (Side, "BULL"),
+        (OrderType, "IOC"),
+        (Scenario, "D"),
+        (SystemState, "BROKEN"),
+    ],
+)
+def test_enums_reject_invalid_values(enum_type, invalid_value):
+    with pytest.raises(ValueError):
+        enum_type(invalid_value)
 
 ================
 File: tests/test_validation_tuner.py
@@ -2342,6 +3070,35 @@ def _empty_metrics() -> Dict[str, float]:
     }
 
 ================
+File: check_dataset.py
+================
+import pandas as pd
+
+df = pd.read_csv("outputs/research_dataset.csv")
+
+event_cols = [
+    "SWEEP_PREV_DAY_HIGH",
+    "SWEEP_PREV_DAY_LOW",
+    "IMPULSE_BODY",
+    "RANGE_COMPRESSION",
+    "VOL_REGIME_SHIFT",
+]
+
+print("ROWS:", len(df))
+
+missing = [c for c in event_cols if c not in df.columns]
+print("MISSING COLS:", missing)
+
+any_event = df[event_cols].sum(axis=1) > 0
+
+print("ROWS WITH ANY EVENT:", int(any_event.sum()))
+print("PCT ANY EVENT:", float(any_event.mean()))
+print("PCT ALL ZERO:", float((df[event_cols].sum(axis=1) == 0).mean()))
+
+print("\nEVENT COUNTS:")
+print(df[event_cols].sum().sort_values(ascending=False).to_string())
+
+================
 File: CHECKLIST_EDGE_FIRST_REFACTORING.md
 ================
 # EDGE-FIRST REFACTORING: TEAM CHECKLIST
@@ -3185,220 +3942,6 @@ print(f"  - Time saved: 2,154 backtest runs!")
 print("\n✓ Scenario filtering enables efficient two-stage tuning")
 
 ================
-File: desk_types/__init__.py
-================
-"""Type definitions for a systematic trading desk."""
-
-from __future__ import annotations
-
-from dataclasses import dataclass
-from datetime import datetime
-from enum import Enum
-from typing import Any, Dict, Optional
-
-
-class Side(str, Enum):
-    LONG = "LONG"
-    SHORT = "SHORT"
-    FLAT = "FLAT"
-
-
-class OrderType(str, Enum):
-    MARKET = "MARKET"
-    STOP = "STOP"
-    LIMIT = "LIMIT"
-
-
-class Scenario(str, Enum):
-    A = "A"
-    B = "B"
-    C = "C"
-
-
-class SystemState(str, Enum):
-    RUNNING = "RUNNING"
-    DEGRADED = "DEGRADED"
-    SAFE_MODE = "SAFE_MODE"
-    HALTED = "HALTED"
-
-
-def _serialize_datetime(value: datetime) -> str:
-    return value.isoformat()
-
-
-def _deserialize_datetime(value: str) -> datetime:
-    return datetime.fromisoformat(value)
-
-
-@dataclass(frozen=True)
-class SignalIntent:
-    strategy_id: str
-    symbol: str
-    side: Side
-    signal_time: datetime
-    sl_points: Optional[float]
-    tp_points: Optional[float]
-    tags: Dict[str, str]
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "strategy_id": self.strategy_id,
-            "symbol": self.symbol,
-            "side": self.side.value,
-            "signal_time": _serialize_datetime(self.signal_time),
-            "sl_points": self.sl_points,
-            "tp_points": self.tp_points,
-            "tags": dict(self.tags),
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "SignalIntent":
-        return cls(
-            strategy_id=data["strategy_id"],
-            symbol=data["symbol"],
-            side=Side(data["side"]),
-            signal_time=_deserialize_datetime(data["signal_time"]),
-            sl_points=data.get("sl_points"),
-            tp_points=data.get("tp_points"),
-            tags=dict(data.get("tags", {})),
-        )
-
-
-@dataclass(frozen=True)
-class OrderIntent:
-    strategy_id: str
-    symbol: str
-    side: Side
-    order_type: OrderType
-    qty: float
-    created_time: datetime
-    sl_points: Optional[float]
-    tp_points: Optional[float]
-    meta: Dict[str, str]
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "strategy_id": self.strategy_id,
-            "symbol": self.symbol,
-            "side": self.side.value,
-            "order_type": self.order_type.value,
-            "qty": self.qty,
-            "created_time": _serialize_datetime(self.created_time),
-            "sl_points": self.sl_points,
-            "tp_points": self.tp_points,
-            "meta": dict(self.meta),
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "OrderIntent":
-        return cls(
-            strategy_id=data["strategy_id"],
-            symbol=data["symbol"],
-            side=Side(data["side"]),
-            order_type=OrderType(data["order_type"]),
-            qty=float(data["qty"]),
-            created_time=_deserialize_datetime(data["created_time"]),
-            sl_points=data.get("sl_points"),
-            tp_points=data.get("tp_points"),
-            meta=dict(data.get("meta", {})),
-        )
-
-
-@dataclass(frozen=True)
-class Fill:
-    order_id: str
-    symbol: str
-    side: Side
-    qty: float
-    fill_time: datetime
-    fill_price: float
-    spread_pips: float
-    slippage_pips: float
-    scenario: Scenario
-    meta: Dict[str, str]
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "order_id": self.order_id,
-            "symbol": self.symbol,
-            "side": self.side.value,
-            "qty": self.qty,
-            "fill_time": _serialize_datetime(self.fill_time),
-            "fill_price": self.fill_price,
-            "spread_pips": self.spread_pips,
-            "slippage_pips": self.slippage_pips,
-            "scenario": self.scenario.value,
-            "meta": dict(self.meta),
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Fill":
-        return cls(
-            order_id=data["order_id"],
-            symbol=data["symbol"],
-            side=Side(data["side"]),
-            qty=float(data["qty"]),
-            fill_time=_deserialize_datetime(data["fill_time"]),
-            fill_price=float(data["fill_price"]),
-            spread_pips=float(data["spread_pips"]),
-            slippage_pips=float(data["slippage_pips"]),
-            scenario=Scenario(data["scenario"]),
-            meta=dict(data.get("meta", {})),
-        )
-
-
-@dataclass(frozen=True)
-class Position:
-    position_id: str
-    symbol: str
-    side: Side
-    qty: float
-    avg_price: float
-    open_time: datetime
-    strategy_id: str
-    magic_number: int
-    meta: Dict[str, str]
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "position_id": self.position_id,
-            "symbol": self.symbol,
-            "side": self.side.value,
-            "qty": self.qty,
-            "avg_price": self.avg_price,
-            "open_time": _serialize_datetime(self.open_time),
-            "strategy_id": self.strategy_id,
-            "magic_number": self.magic_number,
-            "meta": dict(self.meta),
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Position":
-        return cls(
-            position_id=data["position_id"],
-            symbol=data["symbol"],
-            side=Side(data["side"]),
-            qty=float(data["qty"]),
-            avg_price=float(data["avg_price"]),
-            open_time=_deserialize_datetime(data["open_time"]),
-            strategy_id=data["strategy_id"],
-            magic_number=int(data["magic_number"]),
-            meta=dict(data.get("meta", {})),
-        )
-
-
-__all__ = [
-    "Side",
-    "OrderType",
-    "Scenario",
-    "SystemState",
-    "SignalIntent",
-    "OrderIntent",
-    "Fill",
-    "Position",
-]
-
-================
 File: DOCUMENTATION_INDEX.md
 ================
 # Fast & Serious Tuning - Documentation Index
@@ -3641,318 +4184,6 @@ A: Streamed to console with format: `Progress: 100/1,152 | 2h 14m remaining | be
 
 *This index provides navigation to all Fast & Serious Tuning documentation.*
 *Start with the Quick Reference, then explore based on your needs.*
-
-================
-File: edge_discovery/conditional_edge.py
-================
-from __future__ import annotations
-
-from dataclasses import dataclass
-from itertools import combinations
-from typing import Any
-
-import numpy as np
-import pandas as pd
-from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import roc_auc_score
-
-
-@dataclass
-class FoldResult:
-    fold_id: int
-    test_year: int
-    model: str
-    n_train: int
-    n_test: int
-    baseline_tp_rate: float
-    region_coverage: float
-    region_tp_rate: float
-    lift_abs: float
-    lift_ratio: float
-    auc: float
-
-
-def _resolve_timestamp_index(dataset: pd.DataFrame) -> pd.DataFrame:
-    if isinstance(dataset.index, pd.DatetimeIndex):
-        out = dataset.copy()
-        out = out.sort_index()
-        return out
-    if "timestamp" not in dataset.columns:
-        raise ValueError("Dataset must have DatetimeIndex or 'timestamp' column")
-    out = dataset.copy()
-    out["timestamp"] = pd.to_datetime(out["timestamp"], utc=False)
-    out = out.set_index("timestamp").sort_index()
-    return out
-
-
-def _build_rolling_folds(index: pd.DatetimeIndex, train_years: int = 3, test_years: int = 1, purge_bars: int = 10) -> list[tuple[np.ndarray, np.ndarray, int]]:
-    years = pd.Index(index.year)
-    unique_years = sorted(years.unique())
-    folds: list[tuple[np.ndarray, np.ndarray, int]] = []
-
-    for test_start in unique_years:
-        train_start = test_start - train_years
-        train_mask = (years >= train_start) & (years < test_start)
-        test_mask = (years >= test_start) & (years < test_start + test_years)
-        if train_mask.sum() == 0 or test_mask.sum() == 0:
-            continue
-
-        train_idx = np.flatnonzero(train_mask.to_numpy())
-        test_idx = np.flatnonzero(test_mask.to_numpy())
-
-        first_test = int(test_idx.min())
-        last_test = int(test_idx.max())
-        purge_left = max(first_test - purge_bars, 0)
-        purge_right = min(last_test + purge_bars, len(index) - 1)
-
-        keep_train = (train_idx < purge_left) | (train_idx > purge_right)
-        purged_train_idx = train_idx[keep_train]
-        if len(purged_train_idx) == 0:
-            continue
-        folds.append((purged_train_idx, test_idx, test_start))
-
-    return folds
-
-
-def _feature_columns(dataset: pd.DataFrame) -> list[str]:
-    excluded = {"label", "bars_to_resolution", "outcome_type", "timestamp"}
-    cols = [c for c in dataset.columns if c not in excluded]
-    return cols
-
-
-def _build_models(include_xgboost: bool = True) -> dict[str, Any]:
-    models: dict[str, Any] = {
-        "logistic_regression": LogisticRegression(max_iter=1000, random_state=42),
-        "gradient_boosting_d3": GradientBoostingClassifier(max_depth=3, learning_rate=0.05, n_estimators=200, random_state=42),
-    }
-
-    if include_xgboost:
-        try:
-            from xgboost import XGBClassifier
-        except ImportError as exc:
-            raise ImportError("XGBoost requested but package 'xgboost' is not installed") from exc
-
-        models["xgboost_d3"] = XGBClassifier(
-            n_estimators=250,
-            learning_rate=0.03,
-            max_depth=3,
-            subsample=0.9,
-            colsample_bytree=0.9,
-            objective="binary:logistic",
-            eval_metric="logloss",
-            random_state=42,
-        )
-
-    return models
-
-
-def _mean_abs_shap_values(model: Any, x_train: pd.DataFrame, x_test: pd.DataFrame) -> pd.Series:
-    try:
-        import shap
-    except ImportError as exc:
-        raise ImportError("SHAP package is required for this analysis") from exc
-
-    background_n = min(len(x_train), 200)
-    eval_n = min(len(x_test), 500)
-    background = x_train.sample(n=background_n, random_state=42)
-    eval_x = x_test.iloc[:eval_n]
-
-    explainer = shap.Explainer(model, background)
-    shap_values = explainer(eval_x)
-    vals = shap_values.values
-    if vals.ndim == 3:
-        vals = vals[:, :, 1]
-    mean_abs = np.abs(vals).mean(axis=0)
-    return pd.Series(mean_abs, index=x_test.columns)
-
-
-def run_conditional_edge_analysis(
-    dataset: pd.DataFrame,
-    prob_threshold: float = 0.55,
-    corr_threshold: float = 0.85,
-    unstable_feature_min_fold_frac: float = 0.6,
-    include_xgboost: bool = True,
-) -> dict[str, Any]:
-    data = _resolve_timestamp_index(dataset)
-    if "label" not in data.columns:
-        raise ValueError("Dataset must contain a 'label' column")
-
-    feature_cols = _feature_columns(data)
-    x_all = data[feature_cols].astype(float)
-    y_all = data["label"].astype(int)
-
-    folds = _build_rolling_folds(data.index, train_years=3, test_years=1, purge_bars=10)
-    if not folds:
-        raise ValueError("No rolling 3y/1y folds available in the provided dataset")
-
-    models = _build_models(include_xgboost=include_xgboost)
-
-    fold_rows: list[FoldResult] = []
-    shap_rows: list[pd.DataFrame] = []
-
-    for fold_id, (train_idx, test_idx, test_year) in enumerate(folds, start=1):
-        x_train, x_test = x_all.iloc[train_idx], x_all.iloc[test_idx]
-        y_train, y_test = y_all.iloc[train_idx], y_all.iloc[test_idx]
-
-        for model_name, model in models.items():
-            model.fit(x_train, y_train)
-            proba = model.predict_proba(x_test)[:, 1]
-            baseline = float(y_test.mean())
-            region_mask = proba > prob_threshold
-            coverage = float(region_mask.mean())
-            if region_mask.any():
-                region_tp = float(y_test[region_mask].mean())
-            else:
-                region_tp = np.nan
-            lift_abs = float(region_tp - baseline) if not np.isnan(region_tp) else np.nan
-            lift_ratio = float(region_tp / baseline) if (not np.isnan(region_tp) and baseline > 0) else np.nan
-
-            try:
-                auc = float(roc_auc_score(y_test, proba))
-            except ValueError:
-                auc = np.nan
-
-            fold_rows.append(
-                FoldResult(
-                    fold_id=fold_id,
-                    test_year=test_year,
-                    model=model_name,
-                    n_train=len(train_idx),
-                    n_test=len(test_idx),
-                    baseline_tp_rate=baseline,
-                    region_coverage=coverage,
-                    region_tp_rate=region_tp,
-                    lift_abs=lift_abs,
-                    lift_ratio=lift_ratio,
-                    auc=auc,
-                )
-            )
-
-            shap_importance = _mean_abs_shap_values(model, x_train, x_test)
-            shap_frame = shap_importance.reset_index()
-            shap_frame.columns = ["feature", "mean_abs_shap"]
-            shap_frame["fold_id"] = fold_id
-            shap_frame["test_year"] = test_year
-            shap_frame["model"] = model_name
-            shap_rows.append(shap_frame)
-
-    performance = pd.DataFrame([r.__dict__ for r in fold_rows])
-    shap_all = pd.concat(shap_rows, ignore_index=True)
-
-    top10 = (
-        shap_all.sort_values(["model", "fold_id", "mean_abs_shap"], ascending=[True, True, False])
-        .groupby(["model", "fold_id"], as_index=False)
-        .head(10)
-    )
-    top10["in_top10"] = 1
-
-    fold_count = performance["fold_id"].nunique()
-    stability = (
-        top10.groupby(["model", "feature"], as_index=False)["in_top10"]
-        .sum()
-        .rename(columns={"in_top10": "top10_hits"})
-    )
-    stability["fold_fraction"] = stability["top10_hits"] / float(fold_count)
-
-    shap_mean = shap_all.groupby(["model", "feature"], as_index=False)["mean_abs_shap"].mean()
-    feature_stability = stability.merge(shap_mean, on=["model", "feature"], how="left")
-    stable_features = feature_stability.loc[
-        feature_stability["fold_fraction"] >= unstable_feature_min_fold_frac,
-        "feature",
-    ].unique().tolist()
-
-    corr = x_all[stable_features].corr().abs() if stable_features else pd.DataFrame()
-    dropped_corr: list[str] = []
-    if not corr.empty:
-        importance_rank = (
-            feature_stability.groupby("feature", as_index=False)["mean_abs_shap"].mean().set_index("feature")
-        )
-        for i, col_a in enumerate(corr.columns):
-            for col_b in corr.columns[i + 1 :]:
-                if corr.loc[col_a, col_b] > corr_threshold:
-                    imp_a = float(importance_rank.loc[col_a, "mean_abs_shap"])
-                    imp_b = float(importance_rank.loc[col_b, "mean_abs_shap"])
-                    drop_col = col_a if imp_a < imp_b else col_b
-                    dropped_corr.append(drop_col)
-
-    dropped_corr = sorted(set(dropped_corr))
-    final_features = [f for f in stable_features if f not in dropped_corr]
-
-    interaction_rows: list[dict[str, Any]] = []
-    for f1, f2 in combinations(final_features[:15], 2):
-        q1 = x_all[f1].quantile(0.7)
-        q2 = x_all[f2].quantile(0.7)
-        mask = (x_all[f1] >= q1) & (x_all[f2] >= q2)
-        if mask.mean() < 0.03:
-            continue
-
-        per_year = data.loc[mask, "label"].groupby(data.loc[mask].index.year).mean()
-        if len(per_year) < 2:
-            continue
-        if bool((per_year > prob_threshold).all()):
-            interaction_rows.append(
-                {
-                    "feature_1": f1,
-                    "feature_2": f2,
-                    "support": float(mask.mean()),
-                    "tp_rate_mean": float(per_year.mean()),
-                    "tp_rate_min_year": float(per_year.min()),
-                }
-            )
-
-    interactions = pd.DataFrame(interaction_rows).sort_values(
-        ["tp_rate_min_year", "tp_rate_mean"], ascending=False
-    ) if interaction_rows else pd.DataFrame(columns=["feature_1", "feature_2", "support", "tp_rate_mean", "tp_rate_min_year"])
-
-    event_cols = [c for c in feature_cols if c.startswith("event_")]
-    event_rows: list[dict[str, Any]] = []
-    for e in event_cols:
-        event_mask = x_all[e] > 0
-        if event_mask.sum() < 30:
-            continue
-        per_year = y_all[event_mask].groupby(data.index.year[event_mask]).mean()
-        if len(per_year) < 2:
-            continue
-        event_rows.append(
-            {
-                "event": e,
-                "support": int(event_mask.sum()),
-                "tp_rate_mean": float(per_year.mean()),
-                "tp_rate_min_year": float(per_year.min()),
-                "persistent_skew": bool((per_year > 0.5).all() or (per_year < 0.5).all()),
-            }
-        )
-
-    event_skew = pd.DataFrame(event_rows).sort_values("tp_rate_mean", ascending=False) if event_rows else pd.DataFrame(
-        columns=["event", "support", "tp_rate_mean", "tp_rate_min_year", "persistent_skew"]
-    )
-
-    perf_year = (
-        performance.groupby(["test_year", "model"], as_index=False)[
-            ["baseline_tp_rate", "region_tp_rate", "lift_abs", "lift_ratio", "auc", "region_coverage"]
-        ].mean()
-    )
-
-    median_lift = performance["lift_abs"].median(skipna=True)
-    stable_count = len(final_features)
-    decision = "ACCEPT EDGE" if (median_lift >= 0.03 and stable_count >= 5 and not interactions.empty) else "REJECT EDGE"
-
-    return {
-        "decision": decision,
-        "stability_report": {
-            "folds": fold_count,
-            "stable_features_before_corr_drop": len(stable_features),
-            "dropped_for_high_correlation": dropped_corr,
-            "final_stable_features": final_features,
-        },
-        "feature_importance_stability": feature_stability.sort_values(["model", "fold_fraction", "mean_abs_shap"], ascending=[True, False, False]),
-        "per_year_performance": perf_year.sort_values(["test_year", "model"]),
-        "top_stable_feature_interactions": interactions.head(15),
-        "regions_consistent_ptp_gt_055": interactions.loc[interactions["tp_rate_min_year"] > 0.55].head(15),
-        "event_types_persistent_skew": event_skew.loc[event_skew["persistent_skew"]],
-        "fold_performance": performance,
-    }
 
 ================
 File: edge_discovery/dataset_builder.py
@@ -8765,47 +8996,289 @@ For issues:
 **Status:** ✅ All improvements implemented, tested, and ready for real MT5 data
 
 ================
-File: live/state_machine.py
+File: live/live_orchestrator.py
 ================
 from __future__ import annotations
 
-from desk_types import SystemState
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Dict, Iterable, List
+
+import numpy as np
+import pandas as pd
+
+from backtest.trade_log import TRADE_LOG_COLUMNS
+from configs.models import Config
+from features.indicators import adx, atr, ema
+from features.regime import atr_pct_zscore, spike_flag
+from risk.allocator import RiskAllocator
+from risk.conflict import resolve_conflicts
+from desk_types import OrderIntent, Side, SystemState
+
+STRATEGY_MAP = {
+    "S1_TREND_EMA_ATR_ADX": "strategies.s1_trend_ema_atr_adx",
+    "S2_MR_ZSCORE_EMA_REGIME": "strategies.s2_mr_zscore_ema_regime",
+    "S3_BREAKOUT_ATR_REGIME_EMA200": "strategies.s3_breakout_atr_regime_ema200",
+}
 
 
-class SystemStateMachine:
-    def __init__(self, max_execution_errors: int) -> None:
-        self._state = SystemState.RUNNING
-        self._max_execution_errors = max_execution_errors
-        self._execution_errors = 0
-
-    @property
-    def state(self) -> SystemState:
-        return self._state
-
-    @property
-    def execution_errors(self) -> int:
-        return self._execution_errors
-
-    def record_execution_error(self) -> SystemState:
-        self._execution_errors += 1
-        if self._execution_errors >= self._max_execution_errors:
-            self._state = SystemState.HALTED
-        elif self._state == SystemState.RUNNING:
-            self._state = SystemState.DEGRADED
-        return self._state
-
-    def record_reconcile_mismatch(self) -> SystemState:
-        if self._state != SystemState.HALTED:
-            self._state = SystemState.SAFE_MODE
-        return self._state
-
-    def record_dd_flags(self, *, day_dd_breached: bool, week_dd_breached: bool) -> SystemState:
-        if day_dd_breached or week_dd_breached:
-            self._state = SystemState.HALTED
-        return self._state
+@dataclass
+class _StrategySpec:
+    name: str
+    module: Any
+    params: Dict[str, Any]
 
 
-__all__ = ["SystemStateMachine"]
+class LiveOrchestrator:
+    def __init__(self, config: Config) -> None:
+        _validate_bar_contract(config)
+        self._config = config
+        self._strategies = _load_strategies(config)
+        self._allocator = RiskAllocator(config)
+        self._trade_id = 1
+        self._trade_log: List[Dict[str, Any]] = []
+        self._state: SystemState = SystemState.RUNNING
+
+    def update_state(self, state: SystemState) -> None:
+        self._state = state
+
+    def step(self, new_bar_data: Dict[str, pd.DataFrame]) -> List[OrderIntent]:
+        if self._state == SystemState.SAFE_MODE:
+            self._manage_positions_stub(new_bar_data)
+            return []
+
+        prepared = _prepare_features(new_bar_data, self._strategies, self._config)
+        orders: List[OrderIntent] = []
+
+        for symbol, df in prepared.items():
+            if df.empty:
+                continue
+            idx = len(df) - 1
+            signal_time = _resolve_time(df, idx)
+            context = {
+                "df": df,
+                "idx": idx,
+                "symbol": symbol,
+                "current_time": signal_time,
+            }
+
+            signals = []
+            for spec in self._strategies:
+                ctx = dict(context)
+                ctx["config"] = spec.params
+                signal = spec.module.generate_signal(ctx)
+                if signal.side == Side.FLAT:
+                    continue
+                signals.append(signal)
+
+            if not signals:
+                continue
+
+            filtered = resolve_conflicts(
+                signals,
+                policy=self._config.risk.conflict_policy,
+                priority_order=self._config.risk.priority_order,
+            )
+
+            state = {"prices": {symbol: float(df["close"].iat[idx])}}
+            orders_for_symbol = self._allocator.allocate(filtered, state)
+            orders.extend(orders_for_symbol)
+
+            for order in orders_for_symbol:
+                self._trade_log.append(
+                    _build_trade_log_entry(
+                        trade_id=self._trade_id,
+                        order=order,
+                        symbol=symbol,
+                        signal_time=signal_time,
+                        signal_idx=idx,
+                        regime_snapshot=df.get("regime_snapshot", pd.Series([None])).iat[idx],
+                    )
+                )
+                self._trade_id += 1
+
+        self._execution_stub(orders)
+        return orders
+
+    def trade_log(self) -> pd.DataFrame:
+        return pd.DataFrame(self._trade_log, columns=TRADE_LOG_COLUMNS)
+
+    @staticmethod
+    def _execution_stub(orders: List[OrderIntent]) -> None:
+        _ = orders
+        return None
+
+    @staticmethod
+    def _manage_positions_stub(new_bar_data: Dict[str, pd.DataFrame]) -> None:
+        _ = new_bar_data
+        return None
+
+
+def _validate_bar_contract(config: Config) -> None:
+    if config.bar_contract.signal_on != "close":
+        raise ValueError("bar_contract.signal_on must be close")
+    if config.bar_contract.fill_on != "open_next":
+        raise ValueError("bar_contract.fill_on must be open_next")
+    if config.bar_contract.allow_bar0:
+        raise ValueError("bar_contract.allow_bar0 must be false")
+
+
+def _load_strategies(config: Config) -> List[_StrategySpec]:
+    specs: List[_StrategySpec] = []
+    for name in config.strategies.enabled:
+        module_path = STRATEGY_MAP.get(name)
+        if module_path is None:
+            raise ValueError(f"Unsupported strategy: {name}")
+        module = __import__(module_path, fromlist=["generate_signal"])
+        params = dict(config.strategies.params.get(name, {}))
+        specs.append(_StrategySpec(name=name, module=module, params=params))
+    return specs
+
+
+def _prepare_features(
+    df_by_symbol: Dict[str, pd.DataFrame],
+    strategies: Iterable[_StrategySpec],
+    config: Config,
+) -> Dict[str, pd.DataFrame]:
+    prepared: Dict[str, pd.DataFrame] = {}
+    for symbol, df in df_by_symbol.items():
+        df_local = df.copy()
+        df_local = _ensure_ohlc(df_local)
+
+        for spec in strategies:
+            df_local = _apply_strategy_features(df_local, spec)
+
+        if "atr" not in df_local:
+            df_local["atr"] = atr(df_local, 14)
+
+        df_local["regime_snapshot"] = _compute_regime(
+            df_local,
+            window=config.regime.atr_pct_window,
+            atr_n=config.regime.atr_pct_n,
+            z_low=config.regime.z_low,
+            z_high=config.regime.z_high,
+            spike_th=config.regime.spike_tr_atr_th,
+        )
+        prepared[symbol] = df_local
+    return prepared
+
+
+def _ensure_ohlc(df: pd.DataFrame) -> pd.DataFrame:
+    required = {"open", "high", "low", "close"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing required OHLC columns: {sorted(missing)}")
+    return df
+
+
+def _apply_strategy_features(df: pd.DataFrame, spec: _StrategySpec) -> pd.DataFrame:
+    if spec.name == "S1_TREND_EMA_ATR_ADX":
+        ema_fast = int(spec.params.get("ema_fast", 20))
+        ema_slow = int(spec.params.get("ema_slow", 50))
+        atr_period = int(spec.params.get("atr_period", 14))
+        adx_period = int(spec.params.get("adx_period", 14))
+        if "ema_fast" not in df:
+            df["ema_fast"] = ema(df["close"], ema_fast)
+        if "ema_slow" not in df:
+            df["ema_slow"] = ema(df["close"], ema_slow)
+        if "atr" not in df:
+            df["atr"] = atr(df, atr_period)
+        if "adx" not in df:
+            df["adx"] = adx(df, adx_period)
+    elif spec.name == "S2_MR_ZSCORE_EMA_REGIME":
+        ema_base = int(spec.params.get("ema_regime", spec.params.get("ema_base", 200)))
+        adx_period = int(spec.params.get("adx_period", 14))
+        if "ema_base" not in df:
+            df["ema_base"] = ema(df["close"], ema_base)
+        if "adx" not in df:
+            df["adx"] = adx(df, adx_period)
+    elif spec.name == "S3_BREAKOUT_ATR_REGIME_EMA200":
+        atr_period = int(spec.params.get("atr_period", 14))
+        ema_period = int(spec.params.get("ema200", 200))
+        if "atr" not in df:
+            df["atr"] = atr(df, atr_period)
+        if "ema200" not in df:
+            df["ema200"] = ema(df["close"], ema_period)
+    return df
+
+
+def _compute_regime(
+    df: pd.DataFrame,
+    window: int,
+    atr_n: int,
+    z_low: float = -0.5,
+    z_high: float = 0.5,
+    spike_th: float = 2.5,
+) -> pd.Series:
+    atr_series = atr(df, atr_n)
+    atr_pct = atr_series / df["close"] * 100
+    z = atr_pct_zscore(atr_pct, window=window)
+
+    regime = pd.Series(["MID"] * len(df), index=df.index)
+    valid_mask = z.notna()
+    if valid_mask.any():
+        regime.loc[valid_mask] = np.where(
+            z[valid_mask] < z_low,
+            "LOW",
+            np.where(z[valid_mask] > z_high, "HIGH", "MID"),
+        )
+
+    prev_close = df["close"].shift(1)
+    tr = pd.concat(
+        [
+            df["high"] - df["low"],
+            (df["high"] - prev_close).abs(),
+            (df["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    tr_atr = tr / atr_series
+    spikes = spike_flag(tr_atr, th=spike_th)
+    spike_tag = spikes.astype(int).astype(str)
+
+    return "VOL=" + regime + "|SPIKE=" + spike_tag
+
+
+def _resolve_time(df: pd.DataFrame, idx: int) -> datetime:
+    if isinstance(df.index, pd.DatetimeIndex):
+        return df.index[idx].to_pydatetime()
+    if "timestamp" in df.columns:
+        return pd.to_datetime(df["timestamp"].iat[idx]).to_pydatetime()
+    return datetime.utcfromtimestamp(idx)
+
+
+def _build_trade_log_entry(
+    trade_id: int,
+    order: OrderIntent,
+    symbol: str,
+    signal_time: datetime,
+    signal_idx: int,
+    regime_snapshot: Any,
+) -> Dict[str, Any]:
+    return {
+        "trade_id": trade_id,
+        "order_id": f"live-{symbol}-{signal_idx}-{trade_id}",
+        "symbol": symbol,
+        "strategy_id": order.strategy_id,
+        "side": order.side.value,
+        "qty": order.qty,
+        "signal_time": signal_time,
+        "signal_idx": signal_idx,
+        "fill_time": None,
+        "entry_price": None,
+        "exit_time": None,
+        "exit_price": None,
+        "pnl": None,
+        "pnl_pct": None,
+        "spread_used": None,
+        "slippage_used": None,
+        "scenario": "LIVE",
+        "regime_snapshot": regime_snapshot,
+        "reason_codes": ";".join([f"{k}={v}" for k, v in order.meta.items()]),
+    }
+
+
+__all__ = ["LiveOrchestrator"]
 
 ================
 File: MT5_STREAMING_OPTIMIZATION_COMPLETE.md
@@ -9200,62 +9673,6 @@ The MT5 tick edge discovery system is now fully optimized for massive datasets (
 - **Production-ready code** (9/9 tests passing, full backward compatibility)
 
 Ready for real-world MT5 data validation and deployment.
-
-================
-File: outputs/summary.json
-================
-{
-  "metadata": {
-    "n_ticks": 362000000,
-    "n_ticks_filtered": 135226293,
-    "n_ticks_dropped": "0",
-    "n_bars": 2234800,
-    "n_events": 0,
-    "ask_imputed_ratio": 0.0,
-    "date_range": {
-      "start": "2019-01-02 06:00:00",
-      "end": "2024-12-30 23:59:00"
-    }
-  },
-  "parameters": {
-    "bar_period_sec": 60,
-    "compression_duration_min": 5,
-    "comp_vol_pct": 15,
-    "comp_tick_pct": 25,
-    "comp_spread_std_pct": -1,
-    "expansion_vol_pct": 35,
-    "activation_tick_rate_pct": 90,
-    "activation_range_mult": 1.5,
-    "lookback_window_days": 2,
-    "min_years_analyzed": 5,
-    "min_events_per_year": 20,
-    "assumed_spread_pips": 1.0,
-    "permutation_iters": 1000
-  },
-  "imputation": {
-    "ask_imputed_count": 0,
-    "ask_imputed_ratio": 0.0,
-    "median_spread_computed": null
-  },
-  "baseline": {
-    "forward_vol_5m": 8.772069227932529e-05,
-    "forward_range_5m": 0.00015156097329601994,
-    "forward_spread_mean_5m": 4.2846096645603686e-05,
-    "forward_return_mean_5m": 0.0
-  },
-  "permutation_test": {},
-  "effect_sizes": null,
-  "stability_per_year": null,
-  "decision": {
-    "status": "INSUFFICIENT_DATA",
-    "reason": [
-      "No events detected"
-    ],
-    "effect_sizes": null,
-    "min_years_analyzed": 5,
-    "min_events_per_year": 20
-  }
-}
 
 ================
 File: PHASE3_CHECKLIST.md
@@ -11477,218 +11894,6 @@ This entire research rests on **ONE assumption**:
 *Document Created: February 1, 2026*  
 *Version: 1.0*  
 *Classification: Internal Research*
-
-================
-File: risk/allocator.py
-================
-from __future__ import annotations
-
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Dict, List, TYPE_CHECKING
-
-from desk_types import OrderIntent, OrderType, SignalIntent
-
-if TYPE_CHECKING:
-    from configs.models import Config
-
-
-@dataclass
-class AllocationState:
-    prices: Dict[str, float]
-    exposure_by_symbol: Dict[str, float]
-    exposure_total: float
-    risk_multiplier: float
-    risk_multiplier_by_strategy: Dict[str, float]
-
-
-def _build_state(state: object | None) -> AllocationState:
-    if state is None:
-        state_dict: Dict[str, object] = {}
-    elif isinstance(state, dict):
-        state_dict = state
-    else:
-        state_dict = state.__dict__
-
-    prices = dict(state_dict.get("prices", {}))
-    exposure_by_symbol = dict(state_dict.get("exposure_by_symbol", {}))
-    exposure_total = float(state_dict.get("exposure_total", 0.0))
-    risk_multiplier = float(state_dict.get("risk_multiplier", 1.0))
-    risk_multiplier_by_strategy = dict(state_dict.get("risk_multiplier_by_strategy", {}))
-    return AllocationState(
-        prices=prices,
-        exposure_by_symbol=exposure_by_symbol,
-        exposure_total=exposure_total,
-        risk_multiplier=risk_multiplier,
-        risk_multiplier_by_strategy=risk_multiplier_by_strategy,
-    )
-
-
-class RiskAllocator:
-    def __init__(self, config: "Config") -> None:
-        self._config = config
-
-    def allocate(self, signals: List[SignalIntent], state: object | None) -> List[OrderIntent]:
-        caps = self._config.risk.caps
-        state_view = _build_state(state)
-        allocated: List[OrderIntent] = []
-        risk_by_strategy: Dict[str, float] = {}
-        risk_by_symbol: Dict[str, float] = {}
-        exposure_total = state_view.exposure_total
-
-        for signal in signals:
-            if signal.sl_points is None:
-                continue
-            if signal.sl_points <= 0:
-                continue
-
-            risk_multiplier = _resolve_risk_multiplier(signal, state_view)
-            risk_amount = self._config.risk.r_base * risk_multiplier
-            if risk_amount <= 0:
-                continue
-
-            sl_distance_value = signal.sl_points
-            qty = risk_amount / sl_distance_value
-
-            if not _within_caps(
-                signal,
-                risk_amount,
-                qty,
-                risk_by_strategy,
-                risk_by_symbol,
-                caps.per_strategy,
-                caps.per_symbol,
-                caps.usd_exposure_cap,
-                state_view,
-                exposure_total,
-            ):
-                continue
-
-            order = OrderIntent(
-                strategy_id=signal.strategy_id,
-                symbol=signal.symbol,
-                side=signal.side,
-                order_type=OrderType.MARKET,
-                qty=qty,
-                created_time=datetime.utcnow(),
-                sl_points=signal.sl_points,
-                tp_points=signal.tp_points,
-                meta={"risk_multiplier": f"{risk_multiplier:.4f}"},
-            )
-            allocated.append(order)
-            risk_by_strategy[signal.strategy_id] = risk_by_strategy.get(signal.strategy_id, 0.0) + risk_amount
-            risk_by_symbol[signal.symbol] = risk_by_symbol.get(signal.symbol, 0.0) + risk_amount
-            exposure_total += _estimate_usd_exposure(qty, signal.symbol, state_view)
-
-        return allocated
-
-
-def _resolve_risk_multiplier(signal: SignalIntent, state_view: AllocationState) -> float:
-    tag_value = signal.tags.get("risk_multiplier")
-    if tag_value is not None:
-        try:
-            return float(tag_value)
-        except ValueError:
-            return state_view.risk_multiplier
-
-    if signal.strategy_id in state_view.risk_multiplier_by_strategy:
-        return float(state_view.risk_multiplier_by_strategy[signal.strategy_id])
-
-    return state_view.risk_multiplier
-
-
-def _estimate_usd_exposure(qty: float, symbol: str, state_view: AllocationState) -> float:
-    price = float(state_view.prices.get(symbol, 1.0))
-    return abs(qty) * price
-
-
-def _within_caps(
-    signal: SignalIntent,
-    risk_amount: float,
-    qty: float,
-    risk_by_strategy: Dict[str, float],
-    risk_by_symbol: Dict[str, float],
-    per_strategy_cap: float,
-    per_symbol_cap: float,
-    usd_exposure_cap: float,
-    state_view: AllocationState,
-    exposure_total: float,
-) -> bool:
-    next_strategy = risk_by_strategy.get(signal.strategy_id, 0.0) + risk_amount
-    if next_strategy > per_strategy_cap:
-        return False
-
-    next_symbol = risk_by_symbol.get(signal.symbol, 0.0) + risk_amount
-    if next_symbol > per_symbol_cap:
-        return False
-
-    next_exposure_total = exposure_total + _estimate_usd_exposure(qty, signal.symbol, state_view)
-    if next_exposure_total > usd_exposure_cap:
-        return False
-
-    return True
-
-
-__all__ = ["RiskAllocator"]
-
-================
-File: risk/conflict.py
-================
-from __future__ import annotations
-
-from typing import List
-
-from desk_types import Side, SignalIntent
-
-
-def resolve_conflicts(
-    signals: List[SignalIntent],
-    policy: str,
-    priority_order: List[str] | None,
-) -> List[SignalIntent]:
-    if policy == "priority":
-        if not priority_order:
-            return list(signals)
-        return _resolve_priority(signals, priority_order)
-    if policy == "netting":
-        return _resolve_netting(signals)
-    raise ValueError(f"Unknown conflict policy: {policy}")
-
-
-def _resolve_priority(signals: List[SignalIntent], priority_order: List[str]) -> List[SignalIntent]:
-    priority_map = {strategy_id: rank for rank, strategy_id in enumerate(priority_order)}
-    by_symbol: dict[str, List[SignalIntent]] = {}
-    for signal in signals:
-        by_symbol.setdefault(signal.symbol, []).append(signal)
-
-    filtered: List[SignalIntent] = []
-    for symbol, symbol_signals in by_symbol.items():
-        if len(symbol_signals) == 1:
-            filtered.extend(symbol_signals)
-            continue
-
-        symbol_signals.sort(key=lambda item: priority_map.get(item.strategy_id, len(priority_map)))
-        filtered.append(symbol_signals[0])
-
-    return filtered
-
-
-def _resolve_netting(signals: List[SignalIntent]) -> List[SignalIntent]:
-    by_symbol: dict[str, List[SignalIntent]] = {}
-    for signal in signals:
-        by_symbol.setdefault(signal.symbol, []).append(signal)
-
-    filtered: List[SignalIntent] = []
-    for symbol, symbol_signals in by_symbol.items():
-        sides = {signal.side for signal in symbol_signals}
-        if len(sides) > 1 and Side.LONG in sides and Side.SHORT in sides:
-            continue
-        filtered.extend(symbol_signals)
-
-    return filtered
-
-
-__all__ = ["resolve_conflicts"]
 
 ================
 File: runs_tuning_breakout_small/top_k.json
@@ -15878,27 +16083,33 @@ Implement scenario filtering: efficient B-only grid + A/B/C for top_k
 ```
 
 ================
-File: scripts/example_structural_edge_dataset.py
+File: scripts/check_dataset.py
 ================
-"""Example: build a structural edge research dataset from M15 EURUSD data."""
+import pandas as pd
 
-from __future__ import annotations
+df = pd.read_csv('outputs/research_dataset.csv')
 
-from data.io import load_ohlc_csv
-from edge_discovery.dataset_builder import build_research_dataset
+event_cols = [
+    'SWEEP_PREV_DAY_HIGH',
+    'SWEEP_PREV_DAY_LOW',
+    'IMPULSE_BODY',
+    'RANGE_COMPRESSION',
+    'VOL_REGIME_SHIFT'
+]
 
+print("ROWS:", len(df))
 
-if __name__ == "__main__":
-    ohlc = load_ohlc_csv("data/EURUSD_M15.csv")
-    ohlc = ohlc.set_index("time")
-    if "volume" not in ohlc.columns:
-        ohlc["volume"] = 0.0
+missing = [c for c in event_cols if c not in df.columns]
+print("MISSING COLS:", missing)
 
-    dataset = build_research_dataset(ohlc)
+any_event = df[event_cols].sum(axis=1) > 0
 
-    print(dataset.head())
-    print(f"Rows: {len(dataset)}")
-    print(f"Columns: {len(dataset.columns)}")
+print("ROWS WITH ANY EVENT:", int(any_event.sum()))
+print("PCT ANY EVENT:", any_event.mean())
+print("PCT ALL ZERO:", (df[event_cols].sum(axis=1) == 0).mean())
+
+print("\nEVENT COUNTS:")
+print(df[event_cols].sum().sort_values(ascending=False))
 
 ================
 File: scripts/example_tick_edge_workflow.py
@@ -16598,61 +16809,6 @@ print("\nAll examples shown above (not executed).")
 print("See: MT5_STREAMING_OPTIMIZATION_COMPLETE.md for full documentation")
 print("\nReady to process 15GB+ MT5 tick files efficiently! ✓")
 print("="*70 + "\n")
-
-================
-File: scripts/run_conditional_edge_analysis.py
-================
-from __future__ import annotations
-
-import argparse
-import json
-from pathlib import Path
-
-import pandas as pd
-
-from edge_discovery.conditional_edge import run_conditional_edge_analysis
-
-
-def _to_records(df: pd.DataFrame) -> list[dict]:
-    if df.empty:
-        return []
-    out = df.copy()
-    for c in out.columns:
-        if pd.api.types.is_float_dtype(out[c]):
-            out[c] = out[c].round(6)
-    return out.to_dict(orient="records")
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Conditional edge discovery analysis on structural dataset")
-    parser.add_argument("--dataset", required=True, help="Path to research dataset CSV (must include label)")
-    parser.add_argument("--output", default="outputs/conditional_edge_report.json", help="Output JSON report path")
-    parser.add_argument("--no-xgboost", action="store_true", help="Disable XGBoost model")
-    args = parser.parse_args()
-
-    ds = pd.read_csv(args.dataset)
-    report = run_conditional_edge_analysis(ds, include_xgboost=not args.no_xgboost)
-
-    out_payload = {
-        "decision": report["decision"],
-        "stability_report": report["stability_report"],
-        "feature_importance_stability": _to_records(report["feature_importance_stability"]),
-        "per_year_performance": _to_records(report["per_year_performance"]),
-        "top_stable_feature_interactions": _to_records(report["top_stable_feature_interactions"]),
-        "regions_consistent_ptp_gt_055": _to_records(report["regions_consistent_ptp_gt_055"]),
-        "event_types_persistent_skew": _to_records(report["event_types_persistent_skew"]),
-    }
-
-    out_path = Path(args.output)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(out_payload, indent=2), encoding="utf-8")
-
-    print(f"Decision: {report['decision']}")
-    print(f"Saved report: {out_path}")
-
-
-if __name__ == "__main__":
-    main()
 
 ================
 File: scripts/TICK_EDGE_SCAN_README.txt
@@ -19494,45 +19650,6 @@ Get-Content outputs/summary.json | ConvertFrom-Json
 - **Outputs:** `outputs/{events.csv, summary.json, tick_statistics.json}`
 
 ================
-File: tests/test_conditional_edge_analysis.py
-================
-from __future__ import annotations
-
-import numpy as np
-import pandas as pd
-
-from edge_discovery import conditional_edge
-
-
-def test_conditional_edge_analysis_report_structure(monkeypatch) -> None:
-    idx = pd.date_range("2016-01-01", "2023-12-31", freq="D")
-    n = len(idx)
-    rng = np.random.default_rng(42)
-
-    df = pd.DataFrame(index=idx)
-    df["event_breakout"] = (rng.random(n) > 0.7).astype(float)
-    df["event_compression"] = (rng.random(n) > 0.75).astype(float)
-    df["f_trend"] = np.sin(np.linspace(0, 20, n)) + rng.normal(0, 0.2, n)
-    df["f_vol"] = rng.normal(0, 1, n)
-    df["f_pos"] = rng.normal(0, 1, n)
-    edge_score = 0.9 * df["event_breakout"] + 0.6 * (df["f_trend"] > 0).astype(float) - 0.2 * (df["f_vol"] > 1).astype(float)
-    probs = 1.0 / (1.0 + np.exp(-(edge_score - 0.5)))
-    df["label"] = (rng.random(n) < probs).astype(int)
-
-    def fake_shap(model, x_train, x_test):
-        vals = np.linspace(1.0, 0.2, x_test.shape[1])
-        return pd.Series(vals, index=x_test.columns)
-
-    monkeypatch.setattr(conditional_edge, "_mean_abs_shap_values", fake_shap)
-
-    report = conditional_edge.run_conditional_edge_analysis(df, include_xgboost=False)
-
-    assert report["decision"] in {"ACCEPT EDGE", "REJECT EDGE"}
-    assert report["stability_report"]["folds"] >= 3
-    assert not report["feature_importance_stability"].empty
-    assert not report["per_year_performance"].empty
-
-================
 File: tests/test_exit_logic.py
 ================
 """
@@ -20390,67 +20507,52 @@ if __name__ == "__main__":
     print("✓ Test passed: S4 orchestrator runs without NameError")
 
 ================
-File: tests/test_risk.py
+File: tests/test_performance.py
 ================
 from __future__ import annotations
 
-from datetime import datetime
-from types import SimpleNamespace
+import inspect
+import numpy as np
+import pandas as pd
+from pandas.core.window.rolling import Rolling
 
-from desk_types import Side, SignalIntent
-from risk.allocator import RiskAllocator
-from risk.conflict import resolve_conflicts
-
-
-def _signal(strategy_id: str, symbol: str, side: Side, sl_points: float | None) -> SignalIntent:
-    return SignalIntent(
-        strategy_id=strategy_id,
-        symbol=symbol,
-        side=side,
-        signal_time=datetime(2024, 1, 1, 0, 0, 0),
-        sl_points=sl_points,
-        tp_points=None,
-        tags={},
-    )
+from backtest.orchestrator import _run_scenario
+from features.indicators import ema, slope
+from strategies import s2_mr_zscore_ema_regime as s2
 
 
-def _allocator(r_base: float, per_strategy: float, per_symbol: float, usd_cap: float) -> RiskAllocator:
-    caps = SimpleNamespace(
-        per_strategy=per_strategy,
-        per_symbol=per_symbol,
-        usd_exposure_cap=usd_cap,
-    )
-    risk = SimpleNamespace(r_base=r_base, caps=caps)
-    config = SimpleNamespace(risk=risk)
-    return RiskAllocator(config)
+def test_s2_loop_avoids_rolling_apply(monkeypatch) -> None:
+    rows = 50_000
+    close = pd.Series(np.linspace(100.0, 200.0, rows))
+    df = pd.DataFrame({"close": close})
+    df["ema_base"] = ema(df["close"], 20)
+    df["ema_slope"] = slope(df["ema_base"], 20)
+    df["adx"] = 10.0
+
+    config = {"z_window": 30, "z_entry": 1.0, "adx_max": 20.0, "slope_th": 0.1}
+    cols = {col: df[col].to_numpy() for col in df.columns}
+
+    def _raise_on_apply(*args, **kwargs):
+        raise AssertionError("Rolling.apply should not be called inside the bar loop.")
+
+    monkeypatch.setattr(Rolling, "apply", _raise_on_apply, raising=True)
+
+    start_idx = 30
+    for idx in range(start_idx, rows - 1):
+        ctx = {
+            "cols": cols,
+            "idx": idx,
+            "symbol": "EURUSD",
+            "current_time": pd.Timestamp("2024-01-01"),
+            "config": config,
+        }
+        s2.generate_signal(ctx)
 
 
-def test_conflict_priority() -> None:
-    signals = [
-        _signal("S1", "EURUSD", Side.LONG, 10.0),
-        _signal("S2", "EURUSD", Side.SHORT, 12.0),
-    ]
-    filtered = resolve_conflicts(signals, policy="priority", priority_order=["S2", "S1"])
-    assert len(filtered) == 1
-    assert filtered[0].strategy_id == "S2"
-    assert filtered[0].side == Side.SHORT
-
-
-def test_caps_applied() -> None:
-    allocator = _allocator(r_base=0.01, per_strategy=0.01, per_symbol=0.02, usd_cap=100000)
-    signals = [
-        _signal("S1", "EURUSD", Side.LONG, 10.0),
-        _signal("S1", "EURUSD", Side.LONG, 10.0),
-    ]
-    orders = allocator.allocate(signals, state=None)
-    assert len(orders) == 1
-
-
-def test_allocator_no_order_without_sl() -> None:
-    allocator = _allocator(r_base=0.01, per_strategy=0.05, per_symbol=0.05, usd_cap=100000)
-    signals = [_signal("S1", "EURUSD", Side.LONG, None)]
-    orders = allocator.allocate(signals, state=None)
-    assert orders == []
+def test_orchestrator_loop_avoids_hist_slice() -> None:
+    source = inspect.getsource(_run_scenario)
+    assert "iloc[: idx + 1]" not in source
+    assert "df_hist" not in source
 
 ================
 File: tests/test_run_backtest_cli.py
@@ -23831,179 +23933,6 @@ if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 
 ================
-File: tests/test_types.py
-================
-from dataclasses import FrozenInstanceError
-from datetime import datetime
-
-import pytest
-
-from desk_types import (
-    Fill,
-    OrderIntent,
-    OrderType,
-    Position,
-    Scenario,
-    Side,
-    SignalIntent,
-    SystemState,
-)
-
-
-def _sample_datetime() -> datetime:
-    return datetime(2024, 1, 2, 3, 4, 5)
-
-
-def test_signal_intent_roundtrip():
-    original = SignalIntent(
-        strategy_id="strat-1",
-        symbol="EURUSD",
-        side=Side.LONG,
-        signal_time=_sample_datetime(),
-        sl_points=12.5,
-        tp_points=25.0,
-        tags={"regime": "trend", "reason": "breakout"},
-    )
-    payload = original.to_dict()
-    restored = SignalIntent.from_dict(payload)
-    assert restored == original
-
-
-def test_order_intent_roundtrip():
-    original = OrderIntent(
-        strategy_id="strat-2",
-        symbol="USDJPY",
-        side=Side.SHORT,
-        order_type=OrderType.LIMIT,
-        qty=1.25,
-        created_time=_sample_datetime(),
-        sl_points=None,
-        tp_points=30.0,
-        meta={"client": "desk"},
-    )
-    payload = original.to_dict()
-    restored = OrderIntent.from_dict(payload)
-    assert restored == original
-
-
-def test_fill_roundtrip():
-    original = Fill(
-        order_id="order-99",
-        symbol="GBPUSD",
-        side=Side.LONG,
-        qty=3.5,
-        fill_time=_sample_datetime(),
-        fill_price=1.2345,
-        spread_pips=0.2,
-        slippage_pips=-0.1,
-        scenario=Scenario.B,
-        meta={"venue": "sim"},
-    )
-    payload = original.to_dict()
-    restored = Fill.from_dict(payload)
-    assert restored == original
-
-
-def test_position_roundtrip():
-    original = Position(
-        position_id="pos-7",
-        symbol="XAUUSD",
-        side=Side.FLAT,
-        qty=0.0,
-        avg_price=0.0,
-        open_time=_sample_datetime(),
-        strategy_id="strat-3",
-        magic_number=42,
-        meta={"note": "closed"},
-    )
-    payload = original.to_dict()
-    restored = Position.from_dict(payload)
-    assert restored == original
-
-
-@pytest.mark.parametrize(
-    "instance,field, value",
-    [
-        (
-            SignalIntent(
-                strategy_id="strat-1",
-                symbol="EURUSD",
-                side=Side.LONG,
-                signal_time=_sample_datetime(),
-                sl_points=None,
-                tp_points=None,
-                tags={},
-            ),
-            "symbol",
-            "USDCHF",
-        ),
-        (
-            OrderIntent(
-                strategy_id="strat-2",
-                symbol="USDJPY",
-                side=Side.SHORT,
-                order_type=OrderType.MARKET,
-                qty=1.0,
-                created_time=_sample_datetime(),
-                sl_points=None,
-                tp_points=None,
-                meta={},
-            ),
-            "qty",
-            2.0,
-        ),
-        (
-            Fill(
-                order_id="order-99",
-                symbol="GBPUSD",
-                side=Side.LONG,
-                qty=3.5,
-                fill_time=_sample_datetime(),
-                fill_price=1.2345,
-                spread_pips=0.2,
-                slippage_pips=-0.1,
-                scenario=Scenario.A,
-                meta={},
-            ),
-            "fill_price",
-            1.5,
-        ),
-        (
-            Position(
-                position_id="pos-7",
-                symbol="XAUUSD",
-                side=Side.FLAT,
-                qty=0.0,
-                avg_price=0.0,
-                open_time=_sample_datetime(),
-                strategy_id="strat-3",
-                magic_number=42,
-                meta={},
-            ),
-            "magic_number",
-            99,
-        ),
-    ],
-)
-def test_dataclasses_are_frozen(instance, field, value):
-    with pytest.raises(FrozenInstanceError):
-        setattr(instance, field, value)
-
-
-@pytest.mark.parametrize(
-    "enum_type, invalid_value",
-    [
-        (Side, "BULL"),
-        (OrderType, "IOC"),
-        (Scenario, "D"),
-        (SystemState, "BROKEN"),
-    ],
-)
-def test_enums_reject_invalid_values(enum_type, invalid_value):
-    with pytest.raises(ValueError):
-        enum_type(invalid_value)
-
-================
 File: TICK_EDGE_DISCOVERY_FINAL.txt
 ================
 ================================================================================
@@ -26142,309 +26071,60 @@ __all__ = [
 from edge_discovery.conditional_edge import run_conditional_edge_analysis
 
 ================
-File: live/live_orchestrator.py
+File: outputs/summary.json
 ================
-from __future__ import annotations
-
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, Dict, Iterable, List
-
-import numpy as np
-import pandas as pd
-
-from backtest.trade_log import TRADE_LOG_COLUMNS
-from configs.models import Config
-from features.indicators import adx, atr, ema
-from features.regime import atr_pct_zscore, spike_flag
-from risk.allocator import RiskAllocator
-from risk.conflict import resolve_conflicts
-from desk_types import OrderIntent, Side, SystemState
-
-STRATEGY_MAP = {
-    "S1_TREND_EMA_ATR_ADX": "strategies.s1_trend_ema_atr_adx",
-    "S2_MR_ZSCORE_EMA_REGIME": "strategies.s2_mr_zscore_ema_regime",
-    "S3_BREAKOUT_ATR_REGIME_EMA200": "strategies.s3_breakout_atr_regime_ema200",
-}
-
-
-@dataclass
-class _StrategySpec:
-    name: str
-    module: Any
-    params: Dict[str, Any]
-
-
-class LiveOrchestrator:
-    def __init__(self, config: Config) -> None:
-        _validate_bar_contract(config)
-        self._config = config
-        self._strategies = _load_strategies(config)
-        self._allocator = RiskAllocator(config)
-        self._trade_id = 1
-        self._trade_log: List[Dict[str, Any]] = []
-        self._state: SystemState = SystemState.RUNNING
-
-    def update_state(self, state: SystemState) -> None:
-        self._state = state
-
-    def step(self, new_bar_data: Dict[str, pd.DataFrame]) -> List[OrderIntent]:
-        if self._state == SystemState.SAFE_MODE:
-            self._manage_positions_stub(new_bar_data)
-            return []
-
-        prepared = _prepare_features(new_bar_data, self._strategies, self._config)
-        orders: List[OrderIntent] = []
-
-        for symbol, df in prepared.items():
-            if df.empty:
-                continue
-            idx = len(df) - 1
-            signal_time = _resolve_time(df, idx)
-            context = {
-                "df": df,
-                "idx": idx,
-                "symbol": symbol,
-                "current_time": signal_time,
-            }
-
-            signals = []
-            for spec in self._strategies:
-                ctx = dict(context)
-                ctx["config"] = spec.params
-                signal = spec.module.generate_signal(ctx)
-                if signal.side == Side.FLAT:
-                    continue
-                signals.append(signal)
-
-            if not signals:
-                continue
-
-            filtered = resolve_conflicts(
-                signals,
-                policy=self._config.risk.conflict_policy,
-                priority_order=self._config.risk.priority_order,
-            )
-
-            state = {"prices": {symbol: float(df["close"].iat[idx])}}
-            orders_for_symbol = self._allocator.allocate(filtered, state)
-            orders.extend(orders_for_symbol)
-
-            for order in orders_for_symbol:
-                self._trade_log.append(
-                    _build_trade_log_entry(
-                        trade_id=self._trade_id,
-                        order=order,
-                        symbol=symbol,
-                        signal_time=signal_time,
-                        signal_idx=idx,
-                        regime_snapshot=df.get("regime_snapshot", pd.Series([None])).iat[idx],
-                    )
-                )
-                self._trade_id += 1
-
-        self._execution_stub(orders)
-        return orders
-
-    def trade_log(self) -> pd.DataFrame:
-        return pd.DataFrame(self._trade_log, columns=TRADE_LOG_COLUMNS)
-
-    @staticmethod
-    def _execution_stub(orders: List[OrderIntent]) -> None:
-        _ = orders
-        return None
-
-    @staticmethod
-    def _manage_positions_stub(new_bar_data: Dict[str, pd.DataFrame]) -> None:
-        _ = new_bar_data
-        return None
-
-
-def _validate_bar_contract(config: Config) -> None:
-    if config.bar_contract.signal_on != "close":
-        raise ValueError("bar_contract.signal_on must be close")
-    if config.bar_contract.fill_on != "open_next":
-        raise ValueError("bar_contract.fill_on must be open_next")
-    if config.bar_contract.allow_bar0:
-        raise ValueError("bar_contract.allow_bar0 must be false")
-
-
-def _load_strategies(config: Config) -> List[_StrategySpec]:
-    specs: List[_StrategySpec] = []
-    for name in config.strategies.enabled:
-        module_path = STRATEGY_MAP.get(name)
-        if module_path is None:
-            raise ValueError(f"Unsupported strategy: {name}")
-        module = __import__(module_path, fromlist=["generate_signal"])
-        params = dict(config.strategies.params.get(name, {}))
-        specs.append(_StrategySpec(name=name, module=module, params=params))
-    return specs
-
-
-def _prepare_features(
-    df_by_symbol: Dict[str, pd.DataFrame],
-    strategies: Iterable[_StrategySpec],
-    config: Config,
-) -> Dict[str, pd.DataFrame]:
-    prepared: Dict[str, pd.DataFrame] = {}
-    for symbol, df in df_by_symbol.items():
-        df_local = df.copy()
-        df_local = _ensure_ohlc(df_local)
-
-        for spec in strategies:
-            df_local = _apply_strategy_features(df_local, spec)
-
-        if "atr" not in df_local:
-            df_local["atr"] = atr(df_local, 14)
-
-        df_local["regime_snapshot"] = _compute_regime(
-            df_local,
-            window=config.regime.atr_pct_window,
-            atr_n=config.regime.atr_pct_n,
-            z_low=config.regime.z_low,
-            z_high=config.regime.z_high,
-            spike_th=config.regime.spike_tr_atr_th,
-        )
-        prepared[symbol] = df_local
-    return prepared
-
-
-def _ensure_ohlc(df: pd.DataFrame) -> pd.DataFrame:
-    required = {"open", "high", "low", "close"}
-    missing = required - set(df.columns)
-    if missing:
-        raise ValueError(f"Missing required OHLC columns: {sorted(missing)}")
-    return df
-
-
-def _apply_strategy_features(df: pd.DataFrame, spec: _StrategySpec) -> pd.DataFrame:
-    if spec.name == "S1_TREND_EMA_ATR_ADX":
-        ema_fast = int(spec.params.get("ema_fast", 20))
-        ema_slow = int(spec.params.get("ema_slow", 50))
-        atr_period = int(spec.params.get("atr_period", 14))
-        adx_period = int(spec.params.get("adx_period", 14))
-        if "ema_fast" not in df:
-            df["ema_fast"] = ema(df["close"], ema_fast)
-        if "ema_slow" not in df:
-            df["ema_slow"] = ema(df["close"], ema_slow)
-        if "atr" not in df:
-            df["atr"] = atr(df, atr_period)
-        if "adx" not in df:
-            df["adx"] = adx(df, adx_period)
-    elif spec.name == "S2_MR_ZSCORE_EMA_REGIME":
-        ema_base = int(spec.params.get("ema_regime", spec.params.get("ema_base", 200)))
-        adx_period = int(spec.params.get("adx_period", 14))
-        if "ema_base" not in df:
-            df["ema_base"] = ema(df["close"], ema_base)
-        if "adx" not in df:
-            df["adx"] = adx(df, adx_period)
-    elif spec.name == "S3_BREAKOUT_ATR_REGIME_EMA200":
-        atr_period = int(spec.params.get("atr_period", 14))
-        ema_period = int(spec.params.get("ema200", 200))
-        if "atr" not in df:
-            df["atr"] = atr(df, atr_period)
-        if "ema200" not in df:
-            df["ema200"] = ema(df["close"], ema_period)
-    return df
-
-
-def _compute_regime(
-    df: pd.DataFrame,
-    window: int,
-    atr_n: int,
-    z_low: float = -0.5,
-    z_high: float = 0.5,
-    spike_th: float = 2.5,
-) -> pd.Series:
-    atr_series = atr(df, atr_n)
-    atr_pct = atr_series / df["close"] * 100
-    z = atr_pct_zscore(atr_pct, window=window)
-
-    regime = pd.Series(["MID"] * len(df), index=df.index)
-    valid_mask = z.notna()
-    if valid_mask.any():
-        regime.loc[valid_mask] = np.where(
-            z[valid_mask] < z_low,
-            "LOW",
-            np.where(z[valid_mask] > z_high, "HIGH", "MID"),
-        )
-
-    prev_close = df["close"].shift(1)
-    tr = pd.concat(
-        [
-            df["high"] - df["low"],
-            (df["high"] - prev_close).abs(),
-            (df["low"] - prev_close).abs(),
-        ],
-        axis=1,
-    ).max(axis=1)
-    tr_atr = tr / atr_series
-    spikes = spike_flag(tr_atr, th=spike_th)
-    spike_tag = spikes.astype(int).astype(str)
-
-    return "VOL=" + regime + "|SPIKE=" + spike_tag
-
-
-def _resolve_time(df: pd.DataFrame, idx: int) -> datetime:
-    if isinstance(df.index, pd.DatetimeIndex):
-        return df.index[idx].to_pydatetime()
-    if "timestamp" in df.columns:
-        return pd.to_datetime(df["timestamp"].iat[idx]).to_pydatetime()
-    return datetime.utcfromtimestamp(idx)
-
-
-def _build_trade_log_entry(
-    trade_id: int,
-    order: OrderIntent,
-    symbol: str,
-    signal_time: datetime,
-    signal_idx: int,
-    regime_snapshot: Any,
-) -> Dict[str, Any]:
-    return {
-        "trade_id": trade_id,
-        "order_id": f"live-{symbol}-{signal_idx}-{trade_id}",
-        "symbol": symbol,
-        "strategy_id": order.strategy_id,
-        "side": order.side.value,
-        "qty": order.qty,
-        "signal_time": signal_time,
-        "signal_idx": signal_idx,
-        "fill_time": None,
-        "entry_price": None,
-        "exit_time": None,
-        "exit_price": None,
-        "pnl": None,
-        "pnl_pct": None,
-        "spread_used": None,
-        "slippage_used": None,
-        "scenario": "LIVE",
-        "regime_snapshot": regime_snapshot,
-        "reason_codes": ";".join([f"{k}={v}" for k, v in order.meta.items()]),
+{
+  "metadata": {
+    "n_ticks": 362000000,
+    "n_ticks_filtered": 135226293,
+    "n_ticks_dropped": "0",
+    "n_bars": 2234800,
+    "n_events": 0,
+    "ask_imputed_ratio": 0.0,
+    "date_range": {
+      "start": "2019-01-02 06:00:00",
+      "end": "2024-12-30 23:59:00"
     }
-
-
-__all__ = ["LiveOrchestrator"]
-
-================
-File: risk/_types.py
-================
-"""Re-export risk types from the canonical desk_types modules."""
-
-from __future__ import annotations
-
-from desk_types import Fill, OrderIntent, OrderType, Position, Scenario, SignalIntent, Side, SystemState
-
-__all__ = [
-    "Fill",
-    "OrderIntent",
-    "OrderType",
-    "Position",
-    "Scenario",
-    "SignalIntent",
-    "Side",
-    "SystemState",
-]
+  },
+  "parameters": {
+    "bar_period_sec": 60,
+    "compression_duration_min": 5,
+    "comp_vol_pct": 15,
+    "comp_tick_pct": 25,
+    "comp_spread_std_pct": -1,
+    "expansion_vol_pct": 35,
+    "activation_tick_rate_pct": 90,
+    "activation_range_mult": 1.5,
+    "lookback_window_days": 2,
+    "min_years_analyzed": 5,
+    "min_events_per_year": 20,
+    "assumed_spread_pips": 1.0,
+    "permutation_iters": 1000
+  },
+  "imputation": {
+    "ask_imputed_count": 0,
+    "ask_imputed_ratio": 0.0,
+    "median_spread_computed": null
+  },
+  "baseline": {
+    "forward_vol_5m": 8.772069227932529e-05,
+    "forward_range_5m": 0.00015156097329601994,
+    "forward_spread_mean_5m": 4.2846096645603686e-05,
+    "forward_return_mean_5m": 0.0
+  },
+  "permutation_test": {},
+  "effect_sizes": null,
+  "stability_per_year": null,
+  "decision": {
+    "status": "INSUFFICIENT_DATA",
+    "reason": [
+      "No events detected"
+    ],
+    "effect_sizes": null,
+    "min_years_analyzed": 5,
+    "min_events_per_year": 20
+  }
+}
 
 ================
 File: scripts/__main__.py
@@ -26464,6 +26144,124 @@ if __name__ == "__main__":
     else:
         from scripts.run_tuning import main
         main()
+
+================
+File: scripts/example_structural_edge_dataset.py
+================
+"""Build a structural edge research dataset from M15 OHLCV and save to disk."""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+import pandas as pd
+
+from data.io import load_ohlc_csv
+from edge_discovery.dataset_builder import build_research_dataset
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--csv", required=True, help="Path to EURUSD M15 OHLCV CSV")
+    ap.add_argument("--out_dir", default="outputs", help="Output directory")
+    ap.add_argument("--out_name", default="research_dataset.csv", help="Output CSV filename")
+    ap.add_argument("--tz_utc", action="store_true", help="Force UTC timestamps when parsing")
+    args = ap.parse_args()
+
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / args.out_name
+
+    ohlc = load_ohlc_csv(args.csv)
+    if "time" not in ohlc.columns:
+        raise ValueError("Input CSV must contain a 'time' column")
+    ohlc = ohlc.set_index("time")
+
+    # Safety: volume optional
+    if "volume" not in ohlc.columns:
+        ohlc["volume"] = 0.0
+
+    dataset = build_research_dataset(ohlc)
+
+    # Always save CSV (works everywhere)
+    dataset.to_csv(out_path, index=True)
+    print(dataset.head())
+    print(f"Rows: {len(dataset)} | Columns: {len(dataset.columns)}")
+    print(f"Saved: {out_path}")
+
+    # Optional parquet if available
+    try:
+        dataset.to_parquet(out_dir / "research_dataset.parquet", index=True)
+        print(f"Saved: {out_dir / 'research_dataset.parquet'}")
+    except Exception as e:
+        print(f"[warn] Parquet not saved (install pyarrow/fastparquet). Reason: {e}")
+
+
+if __name__ == "__main__":
+    main()
+
+================
+File: scripts/run_conditional_edge_analysis.py
+================
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+
+import pandas as pd
+
+from edge_discovery.conditional_edge import run_conditional_edge_analysis
+
+
+def _to_records(df: pd.DataFrame) -> list[dict]:
+    if df.empty:
+        return []
+    out = df.copy()
+    for c in out.columns:
+        if pd.api.types.is_float_dtype(out[c]):
+            out[c] = out[c].round(6)
+    return out.to_dict(orient="records")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Conditional edge discovery analysis on structural dataset")
+    parser.add_argument("--dataset", required=True, help="Path to research dataset CSV (must include label)")
+    parser.add_argument("--output", default="outputs/conditional_edge_report.json", help="Output JSON report path")
+    parser.add_argument("--no-xgboost", action="store_true", help="Disable XGBoost model")
+    parser.add_argument(
+        "--n_jobs",
+        type=int,
+        default=max(1, (os.cpu_count() or 1) - 2),
+        help="Number of CPU workers for supported models (default: max(1, os.cpu_count()-2))",
+    )
+    args = parser.parse_args()
+
+    ds = pd.read_csv(args.dataset)
+    report = run_conditional_edge_analysis(ds, include_xgboost=not args.no_xgboost, n_jobs=args.n_jobs)
+
+    out_payload = {
+        "decision": report["decision"],
+        "stability_report": report["stability_report"],
+        "feature_importance_stability": _to_records(report["feature_importance_stability"]),
+        "per_year_performance": _to_records(report["per_year_performance"]),
+        "top_stable_feature_interactions": _to_records(report["top_stable_feature_interactions"]),
+        "regions_consistent_ptp_gt_055": _to_records(report["regions_consistent_ptp_gt_055"]),
+        "event_types_persistent_skew": _to_records(report["event_types_persistent_skew"]),
+    }
+
+    out_path = Path(args.output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(out_payload, indent=2), encoding="utf-8")
+
+    print(f"Decision: {report['decision']}")
+    print(f"Saved report: {out_path}")
+
+
+if __name__ == "__main__":
+    main()
 
 ================
 File: scripts/run_tuning.py
@@ -28104,54 +27902,6 @@ def test_atr_adx_performance_sanity() -> None:
     assert elapsed < 2.5
 
 ================
-File: tests/test_performance.py
-================
-from __future__ import annotations
-
-import inspect
-import numpy as np
-import pandas as pd
-from pandas.core.window.rolling import Rolling
-
-from backtest.orchestrator import _run_scenario
-from features.indicators import ema, slope
-from strategies import s2_mr_zscore_ema_regime as s2
-
-
-def test_s2_loop_avoids_rolling_apply(monkeypatch) -> None:
-    rows = 50_000
-    close = pd.Series(np.linspace(100.0, 200.0, rows))
-    df = pd.DataFrame({"close": close})
-    df["ema_base"] = ema(df["close"], 20)
-    df["ema_slope"] = slope(df["ema_base"], 20)
-    df["adx"] = 10.0
-
-    config = {"z_window": 30, "z_entry": 1.0, "adx_max": 20.0, "slope_th": 0.1}
-    cols = {col: df[col].to_numpy() for col in df.columns}
-
-    def _raise_on_apply(*args, **kwargs):
-        raise AssertionError("Rolling.apply should not be called inside the bar loop.")
-
-    monkeypatch.setattr(Rolling, "apply", _raise_on_apply, raising=True)
-
-    start_idx = 30
-    for idx in range(start_idx, rows - 1):
-        ctx = {
-            "cols": cols,
-            "idx": idx,
-            "symbol": "EURUSD",
-            "current_time": pd.Timestamp("2024-01-01"),
-            "config": config,
-        }
-        s2.generate_signal(ctx)
-
-
-def test_orchestrator_loop_avoids_hist_slice() -> None:
-    source = inspect.getsource(_run_scenario)
-    assert "iloc[: idx + 1]" not in source
-    assert "df_hist" not in source
-
-================
 File: tests/test_run_tuning.py
 ================
 from __future__ import annotations
@@ -29011,6 +28761,183 @@ def test_idx_out_of_bounds(mock_config):
     assert signal.tags.get("status") == "idx_error"
 
 ================
+File: tests/test_strategies.py
+================
+from __future__ import annotations
+
+from datetime import datetime
+import importlib.util
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from backtest.orchestrator import _StrategySpec, _apply_strategy_features
+from desk_types import Side
+
+_BASE_DIR = Path(__file__).resolve().parents[1]
+
+
+def _load_strategy(name: str):
+    path = _BASE_DIR / "strategies" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
+S1 = _load_strategy("s1_trend_ema_atr_adx")
+S2 = _load_strategy("s2_mr_zscore_ema_regime")
+S3 = _load_strategy("s3_breakout_atr_regime_ema200")
+
+
+def _sample_time() -> datetime:
+    return datetime(2024, 2, 3, 4, 5, 6)
+
+
+def _make_base_df(rows: int = 60) -> pd.DataFrame:
+    close = pd.Series(np.linspace(100, 130, rows))
+    high = close + 1.5
+    low = close - 1.5
+    df = pd.DataFrame({"close": close, "high": high, "low": low})
+    df["ema_fast"] = close.ewm(span=5, adjust=False).mean()
+    df["ema_slow"] = close.ewm(span=10, adjust=False).mean()
+    df["atr"] = 1.2
+    df["adx"] = 25.0
+    df["ema_base"] = close.ewm(span=20, adjust=False).mean()
+    df["ema_slope"] = 0.0
+    df["ema200"] = close.ewm(span=200, adjust=False).mean()
+    df["mr_z"] = 0.0
+    return df
+
+
+def _ctx(df: pd.DataFrame, idx: int, config: dict) -> dict:
+    return {
+        "cols": {col: df[col].to_numpy() for col in df.columns},
+        "idx": idx,
+        "symbol": "EURUSD",
+        "current_time": _sample_time(),
+        "config": config,
+        "regime": {},
+    }
+
+
+def _with_s3_features(df: pd.DataFrame, config: dict) -> pd.DataFrame:
+    spec = _StrategySpec(name="S3_BREAKOUT_ATR_REGIME_EMA200", module=None, params=config)
+    return _apply_strategy_features(df.copy(), spec)
+
+
+def test_strategies_no_t_plus_1():
+    idx = 30
+    base_df = _make_base_df()
+
+    s1_config = {"adx_th": 20.0, "k_sl": 2.0}
+    s2_config = {
+        "z_window": 10,
+        "slope_window": 5,
+        "z_entry": 1.0,
+        "adx_max": 30.0,
+        "slope_th": 0.1,
+    }
+    s3_config = {"compression_window": 10, "p_low": 20.0, "breakout_window": 5}
+
+    s1_signal = S1.generate_signal(_ctx(base_df, idx, s1_config))
+    s2_signal = S2.generate_signal(_ctx(base_df, idx, s2_config))
+    base_df_s3 = _with_s3_features(base_df, s3_config)
+    s3_signal = S3.generate_signal(_ctx(base_df_s3, idx, s3_config))
+
+    future_df = base_df.copy()
+    future_df.loc[idx + 1 :, "close"] = 999.0
+    future_df.loc[idx + 1 :, "high"] = 1000.0
+    future_df.loc[idx + 1 :, "low"] = 998.0
+    future_df.loc[idx + 1 :, "ema_fast"] = 999.0
+    future_df.loc[idx + 1 :, "ema_slow"] = 999.0
+    future_df.loc[idx + 1 :, "ema_base"] = 999.0
+    future_df.loc[idx + 1 :, "ema_slope"] = 999.0
+    future_df.loc[idx + 1 :, "ema200"] = 999.0
+    future_df.loc[idx + 1 :, "atr"] = 9.0
+    future_df.loc[idx + 1 :, "adx"] = 99.0
+
+    assert s1_signal == S1.generate_signal(_ctx(future_df, idx, s1_config))
+    assert s2_signal == S2.generate_signal(_ctx(future_df, idx, s2_config))
+    future_df_s3 = _with_s3_features(future_df, s3_config)
+    assert s3_signal == S3.generate_signal(_ctx(future_df_s3, idx, s3_config))
+
+
+def test_tags_present():
+    rows = 40
+    close = pd.Series([100.0] * (rows - 1) + [120.0])
+    high = close + 1.0
+    low = close - 1.0
+
+    df = pd.DataFrame({"close": close, "high": high, "low": low})
+    df["ema_fast"] = close.ewm(span=3, adjust=False).mean()
+    df["ema_slow"] = close.ewm(span=8, adjust=False).mean()
+    df["atr"] = [1.5] * rows
+    df["adx"] = [15.0] * rows
+    df["ema_base"] = [100.0] * rows
+    df["ema_slope"] = [0.0] * rows
+    df["ema200"] = [90.0] * rows
+    df["mr_z"] = [0.0] * rows
+
+    idx = rows - 1
+
+    s1_config = {"adx_th": 10.0, "k_sl": 1.5}
+    s1_signal = S1.generate_signal(_ctx(df, idx, s1_config))
+    assert s1_signal.side != Side.FLAT
+    assert s1_signal.tags
+
+    s2_config = {
+        "z_window": 20,
+        "slope_window": 5,
+        "z_entry": 1.0,
+        "adx_max": 20.0,
+        "slope_th": 0.01,
+    }
+    s2_signal = S2.generate_signal(_ctx(df, idx, s2_config))
+    assert s2_signal.side != Side.FLAT
+    assert s2_signal.tags
+
+    df_breakout = df.copy()
+    df_breakout.loc[idx - 5 : idx - 1, "high"] = 101.0
+    df_breakout.loc[idx - 5 : idx - 1, "low"] = 99.0
+    df_breakout.loc[idx, "close"] = 105.0
+    df_breakout.loc[idx, "high"] = 106.0
+    df_breakout.loc[idx, "low"] = 104.0
+    df_breakout.loc[: idx - 1, "atr"] = 2.0
+    df_breakout.loc[idx, "atr"] = 0.5
+
+    s3_config = {"compression_window": 10, "p_low": 30.0, "breakout_window": 5}
+    df_breakout = _with_s3_features(df_breakout, s3_config)
+    s3_signal = S3.generate_signal(_ctx(df_breakout, idx, s3_config))
+    assert s3_signal.side != Side.FLAT
+    assert s3_signal.tags
+
+
+def test_s2_generate_signal_uses_precomputed_mr_z(monkeypatch):
+    df = pd.DataFrame(
+        {
+            "close": [100.0, 100.2, 100.4, 100.6, 100.8, 101.0],
+            "high": [101.0, 101.2, 101.4, 101.6, 101.8, 102.0],
+            "low": [99.0, 99.2, 99.4, 99.6, 99.8, 100.0],
+            "ema_base": [100.0] * 6,
+            "ema_slope": [0.0] * 6,
+            "adx": [10.0] * 6,
+            "mr_z": [0.0, 0.2, -0.1, 0.0, 2.5, 2.5],
+        }
+    )
+
+    def _raise(*_args, **_kwargs):
+        raise AssertionError("generate_signal should not call rolling()")
+
+    monkeypatch.setattr(pd.Series, "rolling", _raise, raising=True)
+
+    config = {"z_entry": 2.0, "adx_max": 20.0, "slope_th": 0.1}
+    signal = S2.generate_signal(_ctx(df, 4, config))
+    assert signal.side == Side.SHORT
+
+================
 File: data/io.py
 ================
 from __future__ import annotations
@@ -29386,6 +29313,180 @@ def rolling_percentile(series: pd.Series, window: int) -> pd.Series:
     return series.rolling(window, min_periods=window).apply(_percentile, raw=False)
 
 ================
+File: strategies/s1_trend_ema_atr_adx.py
+================
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Dict, Optional, Set
+from data.fx import PIP_SIZES
+
+import numpy as np
+
+from desk_types import Side, SignalIntent
+
+STRATEGY_ID = "s1_trend_ema_atr_adx"
+
+
+def required_features() -> Set[str]:
+    return {"ema_fast", "ema_slow", "adx", "atr"}
+
+
+def _get_param(config: Dict[str, Any], key: str, default: Any) -> Any:
+    return config.get(key, default)
+
+
+def _read_value(values: np.ndarray, idx: int) -> Optional[float]:
+    value = values[idx]
+    if value is None:
+        return None
+    if isinstance(value, (float, np.floating)) and np.isnan(value):
+        return None
+    return float(value)
+
+
+def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
+    cols: Dict[str, np.ndarray] = ctx["cols"]
+    idx: int = ctx["idx"]
+    symbol: str = ctx["symbol"]
+    current_time: datetime = ctx["current_time"]
+    config: Dict[str, Any] = ctx.get("config", {})
+
+    ema_fast_col = _get_param(config, "ema_fast_col", "ema_fast")
+    ema_slow_col = _get_param(config, "ema_slow_col", "ema_slow")
+    adx_col = _get_param(config, "adx_col", "adx")
+    atr_col = _get_param(config, "atr_col", "atr_pips")
+
+    ema_fast = _read_value(cols[ema_fast_col], idx)
+    ema_slow = _read_value(cols[ema_slow_col], idx)
+    adx_value = _read_value(cols[adx_col], idx)
+    atr_value = _read_value(cols[atr_col], idx)
+
+    if atr_value is None and atr_col == "atr_pips":
+        # fallback: convert from price-ATR to pips if only "atr" exists
+        atr_price = _read_value(cols.get("atr"), idx) if "atr" in cols else None
+        pip_size = PIP_SIZES.get(symbol, 0.0001)
+        atr_value = (atr_price / pip_size) if atr_price is not None else None
+
+
+    tags: Dict[str, str] = {}
+    side = Side.FLAT
+
+    if ema_fast is None or ema_slow is None:
+        tags["trend"] = "trend_unknown"
+    elif ema_fast > ema_slow:
+        tags["trend"] = "trend_up"
+        side = Side.LONG
+    elif ema_fast < ema_slow:
+        tags["trend"] = "trend_down"
+        side = Side.SHORT
+    else:
+        tags["trend"] = "trend_flat"
+
+    adx_th = config.get("adx_th")
+    adx_pass = True
+    if adx_th is not None:
+        if adx_value is None:
+            adx_pass = False
+        else:
+            adx_pass = adx_value > float(adx_th)
+    tags["adx_gate"] = "adx_pass" if adx_pass else "adx_fail"
+
+    if not adx_pass:
+        side = Side.FLAT
+
+    k_sl = config.get("k_sl")
+    sl_points: Optional[float]
+    if k_sl is None or atr_value is None:
+        sl_points = None
+    else:
+        sl_points = float(k_sl) * atr_value
+
+    min_tp_points = float(_get_param(config, "min_tp_points", 5.0))
+    tp_points: Optional[float]
+    k_tp = config.get("k_tp")
+    if k_tp is not None and atr_value is not None:
+        tp_points = max(float(k_tp) * atr_value, min_tp_points)
+    else:
+        tp_points = None
+
+    return SignalIntent(
+        strategy_id=STRATEGY_ID,
+        symbol=symbol,
+        side=side,
+        signal_time=current_time,
+        sl_points=sl_points,
+        tp_points=tp_points,
+        tags=tags,
+    )
+
+================
+File: tests/test_conditional_edge_analysis.py
+================
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+from edge_discovery import conditional_edge
+
+
+def test_conditional_edge_analysis_report_structure(monkeypatch) -> None:
+    idx = pd.date_range("2016-01-01", "2023-12-31", freq="D")
+    n = len(idx)
+    rng = np.random.default_rng(42)
+
+    df = pd.DataFrame(index=idx)
+    df["event_breakout"] = (rng.random(n) > 0.7).astype(float)
+    df["event_compression"] = (rng.random(n) > 0.75).astype(float)
+    df["f_trend"] = np.sin(np.linspace(0, 20, n)) + rng.normal(0, 0.2, n)
+    df["f_vol"] = rng.normal(0, 1, n)
+    df["f_pos"] = rng.normal(0, 1, n)
+    edge_score = 0.9 * df["event_breakout"] + 0.6 * (df["f_trend"] > 0).astype(float) - 0.2 * (df["f_vol"] > 1).astype(float)
+    probs = 1.0 / (1.0 + np.exp(-(edge_score - 0.5)))
+    df["label"] = (rng.random(n) < probs).astype(int)
+
+    def fake_shap(model, x_train, x_test):
+        vals = np.linspace(1.0, 0.2, x_test.shape[1])
+        return pd.Series(vals, index=x_test.columns)
+
+    monkeypatch.setattr(conditional_edge, "_mean_abs_shap_values", fake_shap)
+
+    report = conditional_edge.run_conditional_edge_analysis(df, include_xgboost=False)
+
+    assert report["decision"] in {"ACCEPT EDGE", "REJECT EDGE"}
+    assert report["stability_report"]["folds"] >= 3
+    assert not report["feature_importance_stability"].empty
+    assert not report["per_year_performance"].empty
+
+
+def test_conditional_edge_ignores_time_and_object_columns(monkeypatch) -> None:
+    idx = pd.date_range("2016-01-01", "2023-12-31", freq="D")
+    n = len(idx)
+    rng = np.random.default_rng(7)
+
+    df = pd.DataFrame(index=idx)
+    df["time"] = idx.astype(str)
+    df["event_breakout"] = (rng.random(n) > 0.7).astype(float)
+    df["feature_with_strings"] = np.where(rng.random(n) > 0.05, rng.normal(0, 1, n).round(4).astype(str), "bad")
+    df["f_trend"] = np.sin(np.linspace(0, 15, n)) + rng.normal(0, 0.2, n)
+    probs = 1.0 / (1.0 + np.exp(-(0.8 * df["event_breakout"] + 0.6 * (df["f_trend"] > 0).astype(float) - 0.5)))
+    df["label"] = (rng.random(n) < probs).astype(int)
+
+    def fake_shap(model, x_train, x_test):
+        vals = np.linspace(1.0, 0.2, x_test.shape[1])
+        return pd.Series(vals, index=x_test.columns)
+
+    monkeypatch.setattr(conditional_edge, "_mean_abs_shap_values", fake_shap)
+
+    report = conditional_edge.run_conditional_edge_analysis(df, include_xgboost=False)
+
+    features = set(report["feature_importance_stability"]["feature"].unique().tolist())
+    assert "time" not in features
+    assert "feature_with_strings" not in features
+    assert report["stability_report"]["folds"] >= 3
+
+================
 File: tests/test_regime_zscore.py
 ================
 import inspect
@@ -29544,112 +29645,693 @@ def test_backtest_runs_medium_dataset() -> None:
     assert trades["regime_snapshot"].str.contains("VOL=").all()
 
 ================
-File: strategies/s1_trend_ema_atr_adx.py
+File: edge_discovery/conditional_edge.py
 ================
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Dict, Optional, Set
-from data.fx import PIP_SIZES
+from dataclasses import dataclass
+from itertools import combinations
+from typing import Any
 
 import numpy as np
-
-from desk_types import Side, SignalIntent
-
-STRATEGY_ID = "s1_trend_ema_atr_adx"
-
-
-def required_features() -> Set[str]:
-    return {"ema_fast", "ema_slow", "adx", "atr"}
+import pandas as pd
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_auc_score
 
 
-def _get_param(config: Dict[str, Any], key: str, default: Any) -> Any:
-    return config.get(key, default)
+@dataclass
+class FoldResult:
+    fold_id: int
+    test_year: int
+    model: str
+    n_train: int
+    n_test: int
+    baseline_tp_rate: float
+    region_coverage: float
+    region_tp_rate: float
+    lift_abs: float
+    lift_ratio: float
+    auc: float
 
 
-def _read_value(values: np.ndarray, idx: int) -> Optional[float]:
-    value = values[idx]
-    if value is None:
-        return None
-    if isinstance(value, (float, np.floating)) and np.isnan(value):
-        return None
-    return float(value)
+def _resolve_timestamp_index(dataset: pd.DataFrame) -> pd.DataFrame:
+    if isinstance(dataset.index, pd.DatetimeIndex):
+        out = dataset.copy()
+        out = out.sort_index()
+        return out
+    if "timestamp" not in dataset.columns:
+        raise ValueError("Dataset must have DatetimeIndex or 'timestamp' column")
+    out = dataset.copy()
+    out["timestamp"] = pd.to_datetime(out["timestamp"], utc=False)
+    out = out.set_index("timestamp").sort_index()
+    return out
 
 
-def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
-    cols: Dict[str, np.ndarray] = ctx["cols"]
-    idx: int = ctx["idx"]
-    symbol: str = ctx["symbol"]
-    current_time: datetime = ctx["current_time"]
-    config: Dict[str, Any] = ctx.get("config", {})
+def _build_rolling_folds(index: pd.DatetimeIndex, train_years: int = 3, test_years: int = 1, purge_bars: int = 10) -> list[tuple[np.ndarray, np.ndarray, int]]:
+    years = pd.Index(index.year)
+    unique_years = sorted(years.unique())
+    folds: list[tuple[np.ndarray, np.ndarray, int]] = []
 
-    ema_fast_col = _get_param(config, "ema_fast_col", "ema_fast")
-    ema_slow_col = _get_param(config, "ema_slow_col", "ema_slow")
-    adx_col = _get_param(config, "adx_col", "adx")
-    atr_col = _get_param(config, "atr_col", "atr_pips")
+    for test_start in unique_years:
+        train_start = test_start - train_years
+        train_mask = (years >= train_start) & (years < test_start)
+        test_mask = (years >= test_start) & (years < test_start + test_years)
+        if train_mask.sum() == 0 or test_mask.sum() == 0:
+            continue
 
-    ema_fast = _read_value(cols[ema_fast_col], idx)
-    ema_slow = _read_value(cols[ema_slow_col], idx)
-    adx_value = _read_value(cols[adx_col], idx)
-    atr_value = _read_value(cols[atr_col], idx)
+        train_mask_arr = np.asarray(train_mask)
+        test_mask_arr = np.asarray(test_mask)
 
-    if atr_value is None and atr_col == "atr_pips":
-        # fallback: convert from price-ATR to pips if only "atr" exists
-        atr_price = _read_value(cols.get("atr"), idx) if "atr" in cols else None
-        pip_size = PIP_SIZES.get(symbol, 0.0001)
-        atr_value = (atr_price / pip_size) if atr_price is not None else None
+        train_idx = np.flatnonzero(train_mask_arr)
+        test_idx = np.flatnonzero(test_mask_arr)
+
+        first_test = int(test_idx.min())
+        last_test = int(test_idx.max())
+        purge_left = max(first_test - purge_bars, 0)
+        purge_right = min(last_test + purge_bars, len(index) - 1)
+
+        keep_train = (train_idx < purge_left) | (train_idx > purge_right)
+        purged_train_idx = train_idx[keep_train]
+        if len(purged_train_idx) == 0:
+            continue
+        folds.append((purged_train_idx, test_idx, test_start))
+
+    return folds
 
 
-    tags: Dict[str, str] = {}
-    side = Side.FLAT
+def _feature_columns(dataset: pd.DataFrame) -> list[str]:
+    excluded = {
+        "label",
+        "bars_to_resolution",
+        "outcome_type",
+        "timestamp",
+        "time",
+    }
+    cols = [
+        c
+        for c in dataset.columns
+        if c not in excluded and pd.api.types.is_numeric_dtype(dataset[c])
+    ]
+    return cols
 
-    if ema_fast is None or ema_slow is None:
-        tags["trend"] = "trend_unknown"
-    elif ema_fast > ema_slow:
-        tags["trend"] = "trend_up"
-        side = Side.LONG
-    elif ema_fast < ema_slow:
-        tags["trend"] = "trend_down"
-        side = Side.SHORT
-    else:
-        tags["trend"] = "trend_flat"
 
-    adx_th = config.get("adx_th")
-    adx_pass = True
-    if adx_th is not None:
-        if adx_value is None:
-            adx_pass = False
-        else:
-            adx_pass = adx_value > float(adx_th)
-    tags["adx_gate"] = "adx_pass" if adx_pass else "adx_fail"
+def _build_models(include_xgboost: bool = True, n_jobs: int | None = None) -> dict[str, Any]:
+    models: dict[str, Any] = {
+        "logistic_regression": LogisticRegression(
+            solver="saga",
+            max_iter=2000,
+            random_state=42,
+            n_jobs=n_jobs,
+        ),
+        "gradient_boosting_d3": GradientBoostingClassifier(max_depth=3, learning_rate=0.05, n_estimators=200, random_state=42),
+    }
 
-    if not adx_pass:
-        side = Side.FLAT
+    if include_xgboost:
+        try:
+            from xgboost import XGBClassifier
+        except ImportError as exc:
+            raise ImportError("XGBoost requested but package 'xgboost' is not installed") from exc
 
-    k_sl = config.get("k_sl")
-    sl_points: Optional[float]
-    if k_sl is None or atr_value is None:
-        sl_points = None
-    else:
-        sl_points = float(k_sl) * atr_value
+        models["xgboost_d3"] = XGBClassifier(
+            n_estimators=250,
+            learning_rate=0.03,
+            max_depth=3,
+            subsample=0.9,
+            colsample_bytree=0.9,
+            objective="binary:logistic",
+            eval_metric="logloss",
+            random_state=42,
+            n_jobs=n_jobs,
+        )
 
-    min_tp_points = float(_get_param(config, "min_tp_points", 5.0))
-    tp_points: Optional[float]
-    k_tp = config.get("k_tp")
-    if k_tp is not None and atr_value is not None:
-        tp_points = max(float(k_tp) * atr_value, min_tp_points)
-    else:
-        tp_points = None
+    return models
 
-    return SignalIntent(
-        strategy_id=STRATEGY_ID,
-        symbol=symbol,
-        side=side,
-        signal_time=current_time,
-        sl_points=sl_points,
-        tp_points=tp_points,
-        tags=tags,
+
+def _mean_abs_shap_values(model: Any, x_train: pd.DataFrame, x_test: pd.DataFrame) -> pd.Series:
+    try:
+        import shap
+    except ImportError as exc:
+        raise ImportError("SHAP package is required for this analysis") from exc
+
+    background_n = min(len(x_train), 200)
+    eval_n = min(len(x_test), 500)
+    background = x_train.sample(n=background_n, random_state=42)
+    eval_x = x_test.iloc[:eval_n]
+
+    explainer = shap.Explainer(model, background)
+    shap_values = explainer(eval_x)
+    vals = shap_values.values
+    if vals.ndim == 3:
+        vals = vals[:, :, 1]
+    mean_abs = np.abs(vals).mean(axis=0)
+    return pd.Series(mean_abs, index=x_test.columns)
+
+
+def run_conditional_edge_analysis(
+    dataset: pd.DataFrame,
+    prob_threshold: float = 0.55,
+    corr_threshold: float = 0.85,
+    unstable_feature_min_fold_frac: float = 0.6,
+    include_xgboost: bool = True,
+    n_jobs: int | None = None,
+) -> dict[str, Any]:
+    data = _resolve_timestamp_index(dataset)
+    if "label" not in data.columns:
+        raise ValueError("Dataset must contain a 'label' column")
+
+    feature_cols = _feature_columns(data)
+    x_all = data[feature_cols].astype(np.float32)
+    if x_all.empty:
+        raise ValueError("Dataset has no usable numeric feature columns after preprocessing")
+
+    if x_all.isna().any().any():
+        x_all = x_all.fillna(x_all.median(numeric_only=True))
+
+    y_all = data["label"].astype(int)
+
+    folds = _build_rolling_folds(data.index, train_years=3, test_years=1, purge_bars=10)
+    if not folds:
+        raise ValueError("No rolling 3y/1y folds available in the provided dataset")
+
+    models = _build_models(include_xgboost=include_xgboost, n_jobs=n_jobs)
+
+    fold_rows: list[FoldResult] = []
+    shap_rows: list[pd.DataFrame] = []
+
+    for fold_id, (train_idx, test_idx, test_year) in enumerate(folds, start=1):
+        x_train, x_test = x_all.iloc[train_idx], x_all.iloc[test_idx]
+        y_train, y_test = y_all.iloc[train_idx], y_all.iloc[test_idx]
+
+        for model_name, model in models.items():
+            model.fit(x_train, y_train)
+            proba = model.predict_proba(x_test)[:, 1]
+            baseline = float(y_test.mean())
+            region_mask = proba > prob_threshold
+            coverage = float(region_mask.mean())
+            if region_mask.any():
+                region_tp = float(y_test[region_mask].mean())
+            else:
+                region_tp = np.nan
+            lift_abs = float(region_tp - baseline) if not np.isnan(region_tp) else np.nan
+            lift_ratio = float(region_tp / baseline) if (not np.isnan(region_tp) and baseline > 0) else np.nan
+
+            try:
+                auc = float(roc_auc_score(y_test, proba))
+            except ValueError:
+                auc = np.nan
+
+            fold_rows.append(
+                FoldResult(
+                    fold_id=fold_id,
+                    test_year=test_year,
+                    model=model_name,
+                    n_train=len(train_idx),
+                    n_test=len(test_idx),
+                    baseline_tp_rate=baseline,
+                    region_coverage=coverage,
+                    region_tp_rate=region_tp,
+                    lift_abs=lift_abs,
+                    lift_ratio=lift_ratio,
+                    auc=auc,
+                )
+            )
+
+            shap_importance = _mean_abs_shap_values(model, x_train, x_test)
+            shap_frame = shap_importance.reset_index()
+            shap_frame.columns = ["feature", "mean_abs_shap"]
+            shap_frame["fold_id"] = fold_id
+            shap_frame["test_year"] = test_year
+            shap_frame["model"] = model_name
+            shap_rows.append(shap_frame)
+
+    performance = pd.DataFrame([r.__dict__ for r in fold_rows])
+    shap_all = pd.concat(shap_rows, ignore_index=True)
+
+    top10 = (
+        shap_all.sort_values(["model", "fold_id", "mean_abs_shap"], ascending=[True, True, False])
+        .groupby(["model", "fold_id"], as_index=False)
+        .head(10)
     )
+    top10["in_top10"] = 1
+
+    fold_count = performance["fold_id"].nunique()
+    stability = (
+        top10.groupby(["model", "feature"], as_index=False)["in_top10"]
+        .sum()
+        .rename(columns={"in_top10": "top10_hits"})
+    )
+    stability["fold_fraction"] = stability["top10_hits"] / float(fold_count)
+
+    shap_mean = shap_all.groupby(["model", "feature"], as_index=False)["mean_abs_shap"].mean()
+    feature_stability = stability.merge(shap_mean, on=["model", "feature"], how="left")
+    stable_features = feature_stability.loc[
+        feature_stability["fold_fraction"] >= unstable_feature_min_fold_frac,
+        "feature",
+    ].unique().tolist()
+
+    corr = x_all[stable_features].corr().abs() if stable_features else pd.DataFrame()
+    dropped_corr: list[str] = []
+    if not corr.empty:
+        importance_rank = (
+            feature_stability.groupby("feature", as_index=False)["mean_abs_shap"].mean().set_index("feature")
+        )
+        for i, col_a in enumerate(corr.columns):
+            for col_b in corr.columns[i + 1 :]:
+                if corr.loc[col_a, col_b] > corr_threshold:
+                    imp_a = float(importance_rank.loc[col_a, "mean_abs_shap"])
+                    imp_b = float(importance_rank.loc[col_b, "mean_abs_shap"])
+                    drop_col = col_a if imp_a < imp_b else col_b
+                    dropped_corr.append(drop_col)
+
+    dropped_corr = sorted(set(dropped_corr))
+    final_features = [f for f in stable_features if f not in dropped_corr]
+
+    interaction_rows: list[dict[str, Any]] = []
+    for f1, f2 in combinations(final_features[:15], 2):
+        q1 = x_all[f1].quantile(0.7)
+        q2 = x_all[f2].quantile(0.7)
+        mask = (x_all[f1] >= q1) & (x_all[f2] >= q2)
+        if mask.mean() < 0.03:
+            continue
+
+        per_year = data.loc[mask, "label"].groupby(data.loc[mask].index.year).mean()
+        if len(per_year) < 2:
+            continue
+        if bool((per_year > prob_threshold).all()):
+            interaction_rows.append(
+                {
+                    "feature_1": f1,
+                    "feature_2": f2,
+                    "support": float(mask.mean()),
+                    "tp_rate_mean": float(per_year.mean()),
+                    "tp_rate_min_year": float(per_year.min()),
+                }
+            )
+
+    interactions = pd.DataFrame(interaction_rows).sort_values(
+        ["tp_rate_min_year", "tp_rate_mean"], ascending=False
+    ) if interaction_rows else pd.DataFrame(columns=["feature_1", "feature_2", "support", "tp_rate_mean", "tp_rate_min_year"])
+
+    event_cols = [c for c in feature_cols if c.startswith("event_")]
+    event_rows: list[dict[str, Any]] = []
+    for e in event_cols:
+        event_mask = x_all[e] > 0
+        if event_mask.sum() < 30:
+            continue
+        per_year = y_all[event_mask].groupby(data.index.year[event_mask]).mean()
+        if len(per_year) < 2:
+            continue
+        event_rows.append(
+            {
+                "event": e,
+                "support": int(event_mask.sum()),
+                "tp_rate_mean": float(per_year.mean()),
+                "tp_rate_min_year": float(per_year.min()),
+                "persistent_skew": bool((per_year > 0.5).all() or (per_year < 0.5).all()),
+            }
+        )
+
+    event_skew = pd.DataFrame(event_rows).sort_values("tp_rate_mean", ascending=False) if event_rows else pd.DataFrame(
+        columns=["event", "support", "tp_rate_mean", "tp_rate_min_year", "persistent_skew"]
+    )
+
+    perf_year = (
+        performance.groupby(["test_year", "model"], as_index=False)[
+            ["baseline_tp_rate", "region_tp_rate", "lift_abs", "lift_ratio", "auc", "region_coverage"]
+        ].mean()
+    )
+
+    median_lift = performance["lift_abs"].median(skipna=True)
+    stable_count = len(final_features)
+    decision = "ACCEPT EDGE" if (median_lift >= 0.03 and stable_count >= 5 and not interactions.empty) else "REJECT EDGE"
+
+    return {
+        "decision": decision,
+        "stability_report": {
+            "folds": fold_count,
+            "stable_features_before_corr_drop": len(stable_features),
+            "dropped_for_high_correlation": dropped_corr,
+            "final_stable_features": final_features,
+        },
+        "feature_importance_stability": feature_stability.sort_values(["model", "fold_fraction", "mean_abs_shap"], ascending=[True, False, False]),
+        "per_year_performance": perf_year.sort_values(["test_year", "model"]),
+        "top_stable_feature_interactions": interactions.head(15),
+        "regions_consistent_ptp_gt_055": interactions.loc[interactions["tp_rate_min_year"] > 0.55].head(15),
+        "event_types_persistent_skew": event_skew.loc[event_skew["persistent_skew"]],
+        "fold_performance": performance,
+    }
+
+================
+File: tests/anti_leakage/test_anti_leakage.py
+================
+import sys
+import inspect
+from types import ModuleType
+from datetime import datetime
+
+import numpy as np
+import pandas as pd
+
+from execution.fill_rules import get_fill_price
+from features.indicators import atr, ema, slope, zscore
+from features.regime import atr_pct_zscore, compute_atr_pct
+from backtest.trade_log import TRADE_LOG_COLUMNS
+from backtest.orchestrator import (
+    BacktestOrchestrator,
+    _StrategySpec,
+    _apply_strategy_features,
+    _compute_regime,
+    _run_scenario,
+)
+from configs.models import (
+    BarContract,
+    Config,
+    Costs,
+    MonteCarlo,
+    MonteCarlo1,
+    MonteCarlo2,
+    Outputs,
+    Reproducibility,
+    Risk,
+    RiskCaps,
+    SlippageModel,
+    Strategies,
+    Universe,
+    Validation,
+    WalkForward,
+)
+from desk_types import Side, SignalIntent
+from validation.filter_tuner import _apply_filters
+from strategies import s2_mr_zscore_ema_regime as s2_strategy
+
+
+def test_feature_functions_ignore_future_data() -> None:
+    series = pd.Series([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], dtype=float)
+    t = 5
+
+    ema_original = ema(series, 3).iat[t]
+    slope_original = slope(series, 3).iat[t]
+    zscore_original = zscore(series, 3).iat[t]
+
+    series_modified = series.copy()
+    series_modified.iloc[t + 1 :] = series_modified.iloc[t + 1 :] + 100
+
+    ema_modified = ema(series_modified, 3).iat[t]
+    slope_modified = slope(series_modified, 3).iat[t]
+    zscore_modified = zscore(series_modified, 3).iat[t]
+
+    assert np.isclose(ema_original, ema_modified, equal_nan=True)
+    assert np.isclose(slope_original, slope_modified, equal_nan=True)
+    assert np.isclose(zscore_original, zscore_modified, equal_nan=True)
+
+    df = pd.DataFrame(
+        {
+            "high": [10.0, 11.0, 12.0, 13.0],
+            "low": [9.0, 10.0, 11.0, 12.0],
+            "close": [9.5, 10.5, 11.5, 12.5],
+        }
+    )
+    atr_original = atr(df, 2).iat[2]
+    df_modified = df.copy()
+    df_modified.loc[3, "high"] = 99.0
+    df_modified.loc[3, "low"] = 1.0
+    df_modified.loc[3, "close"] = 50.0
+    atr_modified = atr(df_modified, 2).iat[2]
+    assert np.isclose(atr_original, atr_modified, equal_nan=True)
+
+
+def test_atr_pct_and_regime_ignore_future_data() -> None:
+    df = pd.DataFrame(
+        {
+            "open": [10.0, 10.2, 10.4, 10.3, 10.6, 10.8, 11.0, 11.1],
+            "high": [10.5, 10.6, 10.8, 10.7, 11.0, 11.2, 11.4, 11.5],
+            "low": [9.8, 10.0, 10.2, 10.1, 10.4, 10.6, 10.8, 10.9],
+            "close": [10.1, 10.3, 10.5, 10.4, 10.7, 10.9, 11.1, 11.2],
+        }
+    )
+    t = 5
+    atr_n = 3
+    window = 3
+
+    atr_pct_original = compute_atr_pct(df, atr_n=atr_n).iat[t]
+    regime_original = _compute_regime(df, window=window, atr_n=atr_n).iat[t]
+
+    df_modified = df.copy()
+    df_modified.loc[t + 1 :, "high"] = df_modified.loc[t + 1 :, "high"] + 50.0
+    df_modified.loc[t + 1 :, "low"] = df_modified.loc[t + 1 :, "low"] - 50.0
+    df_modified.loc[t + 1 :, "close"] = df_modified.loc[t + 1 :, "close"] + 25.0
+
+    atr_pct_modified = compute_atr_pct(df_modified, atr_n=atr_n).iat[t]
+    regime_modified = _compute_regime(df_modified, window=window, atr_n=atr_n).iat[t]
+
+    assert np.isclose(atr_pct_original, atr_pct_modified, equal_nan=True)
+    assert regime_original == regime_modified
+
+
+def test_s2_ema_slope_feature_ignores_future_data() -> None:
+    df = pd.DataFrame(
+        {
+            "open": [10.0, 10.2, 10.4, 10.3, 10.6, 10.8, 11.0],
+            "high": [10.5, 10.6, 10.8, 10.7, 11.0, 11.2, 11.4],
+            "low": [9.8, 10.0, 10.2, 10.1, 10.4, 10.6, 10.8],
+            "close": [10.1, 10.3, 10.5, 10.4, 10.7, 10.9, 11.1],
+        }
+    )
+    t = 4
+    spec = _StrategySpec(
+        name="S2_MR_ZSCORE_EMA_REGIME",
+        module=None,
+        params={"ema_regime": 3, "adx_period": 2, "slope_window": 3},
+    )
+
+    prepared = _apply_strategy_features(df.copy(), spec)
+    ema_slope_original = prepared["ema_slope"].iat[t]
+
+    df_modified = df.copy()
+    df_modified.loc[t + 1 :, "close"] = df_modified.loc[t + 1 :, "close"] + 50.0
+    prepared_modified = _apply_strategy_features(df_modified, spec)
+    ema_slope_modified = prepared_modified["ema_slope"].iat[t]
+
+    assert np.isclose(ema_slope_original, ema_slope_modified, equal_nan=True)
+
+
+def test_s2_mr_z_feature_and_signal_ignore_future_data() -> None:
+    df = pd.DataFrame(
+        {
+            "open": [10.0, 10.2, 10.4, 10.3, 10.6, 10.8, 11.0, 11.2],
+            "high": [10.5, 10.6, 10.8, 10.7, 11.0, 11.2, 11.4, 11.6],
+            "low": [9.8, 10.0, 10.2, 10.1, 10.4, 10.6, 10.8, 11.0],
+            "close": [10.1, 10.3, 10.5, 10.4, 10.7, 10.9, 11.1, 11.3],
+        }
+    )
+    t = 5
+    spec = _StrategySpec(
+        name="S2_MR_ZSCORE_EMA_REGIME",
+        module=None,
+        params={"ema_regime": 3, "adx_period": 3, "slope_window": 3, "z_window": 3},
+    )
+    prepared = _apply_strategy_features(df.copy(), spec)
+    mr_z_original = prepared["mr_z"].iat[t]
+    ctx = {
+        "cols": {col: prepared[col].to_numpy() for col in prepared.columns},
+        "idx": t,
+        "symbol": "EURUSD",
+        "current_time": datetime(2024, 1, 1),
+        "config": {"z_entry": 1.0, "adx_max": 50.0, "slope_th": 1.0},
+    }
+    signal_original = s2_strategy.generate_signal(ctx)
+
+    df_modified = df.copy()
+    df_modified.loc[t + 1 :, "close"] = df_modified.loc[t + 1 :, "close"] + 50.0
+    df_modified.loc[t + 1 :, "high"] = df_modified.loc[t + 1 :, "high"] + 50.0
+    df_modified.loc[t + 1 :, "low"] = df_modified.loc[t + 1 :, "low"] - 50.0
+    prepared_modified = _apply_strategy_features(df_modified, spec)
+    mr_z_modified = prepared_modified["mr_z"].iat[t]
+    ctx["cols"] = {col: prepared_modified[col].to_numpy() for col in prepared_modified.columns}
+    signal_modified = s2_strategy.generate_signal(ctx)
+
+    assert np.isclose(mr_z_original, mr_z_modified, equal_nan=True)
+    assert signal_original == signal_modified
+
+
+def test_bar_contract_fill_is_open_next() -> None:
+    df = pd.DataFrame({"open": [1.1, 1.2, 1.3]})
+    assert get_fill_price(df, idx_t=0, side="buy") == 1.2
+
+
+def test_atr_pct_zscore_uses_rolling_window() -> None:
+    series = pd.Series([0.5, 1.0, 0.8, 1.2, 1.5, 0.9, 1.1, 1.3, 1.4, 1.6], dtype=float)
+    window = 5
+    t = 6
+
+    original = atr_pct_zscore(series, window=window).iat[t]
+
+    modified = series.copy()
+    modified.iloc[t + 1 :] = modified.iloc[t + 1 :] + 100
+
+    recomputed = atr_pct_zscore(modified, window=window).iat[t]
+    assert np.isclose(original, recomputed, equal_nan=True)
+
+
+def test_breakout_filter_uses_train_only_percentiles() -> None:
+    df = pd.DataFrame(
+        {
+            "atr_pct": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            "pnl": [0.1] * 8,
+        }
+    )
+    train_idx = range(0, 4)
+    val_idx = range(4, 6)
+    params = {"atr_pct_percentile_low": 0.2, "atr_pct_percentile_high": 0.8, "spike_block": False}
+
+    baseline = _apply_filters("S3_BREAKOUT_ATR_REGIME_EMA200", params, df, train_idx, val_idx)
+
+    df_modified = df.copy()
+    df_modified.loc[list(val_idx), "atr_pct"] = [500.0, 600.0]
+
+    recomputed = _apply_filters("S3_BREAKOUT_ATR_REGIME_EMA200", params, df_modified, train_idx, val_idx)
+
+    assert baseline["atr_pct"].tolist() == recomputed["atr_pct"].tolist()
+
+
+def test_trade_log_tracks_feature_time_bounds() -> None:
+    assert "features_max_time_used" in TRADE_LOG_COLUMNS
+
+    trade_log = pd.DataFrame(
+        [
+            {
+                "trade_id": 1,
+                "order_id": "o-1",
+                "symbol": "EURUSD",
+                "strategy_id": "s1",
+                "side": "long",
+                "qty": 1.0,
+                "signal_time": pd.Timestamp("2024-01-01T00:00:00Z"),
+                "signal_idx": 0,
+                "fill_time": pd.Timestamp("2024-01-01T00:05:00Z"),
+                "entry_price": 1.0,
+                "exit_time": pd.Timestamp("2024-01-01T00:10:00Z"),
+                "exit_price": 1.1,
+                "pnl": 0.1,
+                "pnl_pct": 0.1,
+                "spread_used": 0.0,
+                "slippage_used": 0.0,
+                "scenario": "A",
+                "regime_snapshot": "VOL=LOW|SPIKE=0",
+                "reason_codes": "",
+                "features_max_time_used": pd.Timestamp("2024-01-01T00:00:00Z"),
+            }
+        ]
+    )
+
+    assert (trade_log["features_max_time_used"] <= trade_log["signal_time"]).all()
+
+
+def _make_dummy_config() -> Config:
+    return Config(
+        universe=Universe(symbols=["EURUSD"], timeframe="M1"),
+        bar_contract=BarContract(signal_on="close", fill_on="open_next", allow_bar0=False),
+        strategies=Strategies(
+            enabled=["DUMMY_ANTI_LEAK"],
+            params={"DUMMY_ANTI_LEAK": {}},
+        ),
+        risk=Risk(
+            r_base=1.0,
+            caps=RiskCaps(per_strategy=100.0, per_symbol=100.0, usd_exposure_cap=1_000_000.0),
+            conflict_policy="priority",
+            priority_order=["DUMMY_ANTI_LEAK"],
+            dd_day_limit=1.0,
+            dd_week_limit=1.0,
+            max_execution_errors=1,
+        ),
+        costs=Costs(
+            spread_baseline_pips={"EURUSD": 0.0},
+            slippage=SlippageModel(
+                slip_base=0.0,
+                slip_k=0.0,
+                spike_tr_atr_th=10.0,
+                spike_mult=1.0,
+            ),
+            scenarios={"A": 1.0, "B": 1.0, "C": 1.0},
+        ),
+        validation=Validation(walk_forward=WalkForward(train=1, val=1, test=1), perturb_core_params_pct=0.0),
+        montecarlo=MonteCarlo(
+            mc1=MonteCarlo1(block_min=1, block_max=1, n_sims=1),
+            mc2=MonteCarlo2(spread_noise_range=(1.0, 1.0), slippage_noise_range=(1.0, 1.0), n_sims=1),
+        ),
+        outputs=Outputs(runs_dir="./runs", write_trades_csv=False, write_report_json=False, write_mc_json=False),
+        reproducibility=Reproducibility(random_seed=1),
+    )
+
+
+def _make_price_df(n_bars: int) -> pd.DataFrame:
+    close = pd.Series(range(n_bars), dtype=float)
+    return pd.DataFrame(
+        {
+            "open": close + 0.01,
+            "high": close + 0.05,
+            "low": close - 0.05,
+            "close": close,
+        }
+    )
+
+
+def test_orchestrator_strategies_do_not_see_future(monkeypatch) -> None:
+    module = ModuleType("dummy_strategy")
+    module.captured = []
+
+    def generate_signal(ctx):
+        cols = ctx["cols"]
+        last_close = float(cols["close"][ctx["idx"]])
+        side = Side.LONG if last_close > 100 else Side.SHORT
+        signal = SignalIntent(
+            strategy_id="dummy",
+            symbol=ctx["symbol"],
+            side=side,
+            signal_time=ctx["current_time"],
+            sl_points=1.0,
+            tp_points=None,
+            tags={"last_close": f"{last_close:.2f}"},
+        )
+        if ctx["idx"] == 50:
+            module.captured.append(signal)
+        return signal
+
+    module.generate_signal = generate_signal
+    monkeypatch.setitem(sys.modules, "dummy_strategy", module)
+
+    from backtest import orchestrator as orchestrator_module
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "STRATEGY_MAP",
+        {**orchestrator_module.STRATEGY_MAP, "DUMMY_ANTI_LEAK": "dummy_strategy"},
+    )
+
+    orchestrator = BacktestOrchestrator()
+    config = _make_dummy_config()
+
+    df = _make_price_df(100)
+    module.captured = []
+    orchestrator.run({"EURUSD": df}, config)
+    assert module.captured
+    baseline = module.captured[0].to_dict()
+
+    df_modified = df.copy()
+    df_modified.loc[80:, ["open", "high", "low", "close"]] += 200.0
+    module.captured = []
+    orchestrator.run({"EURUSD": df_modified}, config)
+    assert module.captured
+    modified = module.captured[0].to_dict()
+
+    assert baseline == modified
+
+
+def test_orchestrator_loop_avoids_hist_copy() -> None:
+    source = inspect.getsource(_run_scenario)
+    assert "df.iloc[: idx + 1]" not in source
+    assert "df_hist" not in source
 
 ================
 File: tests/test_run_tuning_mp.py
@@ -29986,183 +30668,6 @@ def test_worker_accepts_dataframes() -> None:
         assert "trades_A" in result_full
         assert "trades_B" in result_full
         assert "trades_C" in result_full
-
-================
-File: tests/test_strategies.py
-================
-from __future__ import annotations
-
-from datetime import datetime
-import importlib.util
-from pathlib import Path
-
-import numpy as np
-import pandas as pd
-
-from backtest.orchestrator import _StrategySpec, _apply_strategy_features
-from desk_types import Side
-
-_BASE_DIR = Path(__file__).resolve().parents[1]
-
-
-def _load_strategy(name: str):
-    path = _BASE_DIR / "strategies" / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    spec.loader.exec_module(module)
-    return module
-
-
-S1 = _load_strategy("s1_trend_ema_atr_adx")
-S2 = _load_strategy("s2_mr_zscore_ema_regime")
-S3 = _load_strategy("s3_breakout_atr_regime_ema200")
-
-
-def _sample_time() -> datetime:
-    return datetime(2024, 2, 3, 4, 5, 6)
-
-
-def _make_base_df(rows: int = 60) -> pd.DataFrame:
-    close = pd.Series(np.linspace(100, 130, rows))
-    high = close + 1.5
-    low = close - 1.5
-    df = pd.DataFrame({"close": close, "high": high, "low": low})
-    df["ema_fast"] = close.ewm(span=5, adjust=False).mean()
-    df["ema_slow"] = close.ewm(span=10, adjust=False).mean()
-    df["atr"] = 1.2
-    df["adx"] = 25.0
-    df["ema_base"] = close.ewm(span=20, adjust=False).mean()
-    df["ema_slope"] = 0.0
-    df["ema200"] = close.ewm(span=200, adjust=False).mean()
-    df["mr_z"] = 0.0
-    return df
-
-
-def _ctx(df: pd.DataFrame, idx: int, config: dict) -> dict:
-    return {
-        "cols": {col: df[col].to_numpy() for col in df.columns},
-        "idx": idx,
-        "symbol": "EURUSD",
-        "current_time": _sample_time(),
-        "config": config,
-        "regime": {},
-    }
-
-
-def _with_s3_features(df: pd.DataFrame, config: dict) -> pd.DataFrame:
-    spec = _StrategySpec(name="S3_BREAKOUT_ATR_REGIME_EMA200", module=None, params=config)
-    return _apply_strategy_features(df.copy(), spec)
-
-
-def test_strategies_no_t_plus_1():
-    idx = 30
-    base_df = _make_base_df()
-
-    s1_config = {"adx_th": 20.0, "k_sl": 2.0}
-    s2_config = {
-        "z_window": 10,
-        "slope_window": 5,
-        "z_entry": 1.0,
-        "adx_max": 30.0,
-        "slope_th": 0.1,
-    }
-    s3_config = {"compression_window": 10, "p_low": 20.0, "breakout_window": 5}
-
-    s1_signal = S1.generate_signal(_ctx(base_df, idx, s1_config))
-    s2_signal = S2.generate_signal(_ctx(base_df, idx, s2_config))
-    base_df_s3 = _with_s3_features(base_df, s3_config)
-    s3_signal = S3.generate_signal(_ctx(base_df_s3, idx, s3_config))
-
-    future_df = base_df.copy()
-    future_df.loc[idx + 1 :, "close"] = 999.0
-    future_df.loc[idx + 1 :, "high"] = 1000.0
-    future_df.loc[idx + 1 :, "low"] = 998.0
-    future_df.loc[idx + 1 :, "ema_fast"] = 999.0
-    future_df.loc[idx + 1 :, "ema_slow"] = 999.0
-    future_df.loc[idx + 1 :, "ema_base"] = 999.0
-    future_df.loc[idx + 1 :, "ema_slope"] = 999.0
-    future_df.loc[idx + 1 :, "ema200"] = 999.0
-    future_df.loc[idx + 1 :, "atr"] = 9.0
-    future_df.loc[idx + 1 :, "adx"] = 99.0
-
-    assert s1_signal == S1.generate_signal(_ctx(future_df, idx, s1_config))
-    assert s2_signal == S2.generate_signal(_ctx(future_df, idx, s2_config))
-    future_df_s3 = _with_s3_features(future_df, s3_config)
-    assert s3_signal == S3.generate_signal(_ctx(future_df_s3, idx, s3_config))
-
-
-def test_tags_present():
-    rows = 40
-    close = pd.Series([100.0] * (rows - 1) + [120.0])
-    high = close + 1.0
-    low = close - 1.0
-
-    df = pd.DataFrame({"close": close, "high": high, "low": low})
-    df["ema_fast"] = close.ewm(span=3, adjust=False).mean()
-    df["ema_slow"] = close.ewm(span=8, adjust=False).mean()
-    df["atr"] = [1.5] * rows
-    df["adx"] = [15.0] * rows
-    df["ema_base"] = [100.0] * rows
-    df["ema_slope"] = [0.0] * rows
-    df["ema200"] = [90.0] * rows
-    df["mr_z"] = [0.0] * rows
-
-    idx = rows - 1
-
-    s1_config = {"adx_th": 10.0, "k_sl": 1.5}
-    s1_signal = S1.generate_signal(_ctx(df, idx, s1_config))
-    assert s1_signal.side != Side.FLAT
-    assert s1_signal.tags
-
-    s2_config = {
-        "z_window": 20,
-        "slope_window": 5,
-        "z_entry": 1.0,
-        "adx_max": 20.0,
-        "slope_th": 0.01,
-    }
-    s2_signal = S2.generate_signal(_ctx(df, idx, s2_config))
-    assert s2_signal.side != Side.FLAT
-    assert s2_signal.tags
-
-    df_breakout = df.copy()
-    df_breakout.loc[idx - 5 : idx - 1, "high"] = 101.0
-    df_breakout.loc[idx - 5 : idx - 1, "low"] = 99.0
-    df_breakout.loc[idx, "close"] = 105.0
-    df_breakout.loc[idx, "high"] = 106.0
-    df_breakout.loc[idx, "low"] = 104.0
-    df_breakout.loc[: idx - 1, "atr"] = 2.0
-    df_breakout.loc[idx, "atr"] = 0.5
-
-    s3_config = {"compression_window": 10, "p_low": 30.0, "breakout_window": 5}
-    df_breakout = _with_s3_features(df_breakout, s3_config)
-    s3_signal = S3.generate_signal(_ctx(df_breakout, idx, s3_config))
-    assert s3_signal.side != Side.FLAT
-    assert s3_signal.tags
-
-
-def test_s2_generate_signal_uses_precomputed_mr_z(monkeypatch):
-    df = pd.DataFrame(
-        {
-            "close": [100.0, 100.2, 100.4, 100.6, 100.8, 101.0],
-            "high": [101.0, 101.2, 101.4, 101.6, 101.8, 102.0],
-            "low": [99.0, 99.2, 99.4, 99.6, 99.8, 100.0],
-            "ema_base": [100.0] * 6,
-            "ema_slope": [0.0] * 6,
-            "adx": [10.0] * 6,
-            "mr_z": [0.0, 0.2, -0.1, 0.0, 2.5, 2.5],
-        }
-    )
-
-    def _raise(*_args, **_kwargs):
-        raise AssertionError("generate_signal should not call rolling()")
-
-    monkeypatch.setattr(pd.Series, "rolling", _raise, raising=True)
-
-    config = {"z_entry": 2.0, "adx_max": 20.0, "slope_th": 0.1}
-    signal = S2.generate_signal(_ctx(df, 4, config))
-    assert signal.side == Side.SHORT
 
 ================
 File: tuning/grid.py
@@ -31850,6 +32355,260 @@ if __name__ == '__main__':
     sys.exit(0 if status == 'GO' else 1)
 
 ================
+File: strategies/s2_mr_zscore_ema_regime.py
+================
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Dict, Optional, Set
+from data.fx import PIP_SIZES
+
+
+import numpy as np
+
+from desk_types import Side, SignalIntent
+STRATEGY_ID = "s2_mr_zscore_ema_regime"
+
+
+def required_features() -> Set[str]:
+    return {"close", "ema_base", "ema_slope", "adx", "mr_z", "atr"}
+
+
+def _get_param(config: Dict[str, Any], key: str, default: Any) -> Any:
+    return config.get(key, default)
+
+
+def _read_value(values: np.ndarray, idx: int) -> Optional[float]:
+    value = values[idx]
+    if value is None:
+        return None
+    if isinstance(value, (float, np.floating)) and np.isnan(value):
+        return None
+    return float(value)
+
+
+def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
+    cols: Dict[str, np.ndarray] = ctx["cols"]
+    idx: int = ctx["idx"]
+    symbol: str = ctx["symbol"]
+    current_time: datetime = ctx["current_time"]
+    config: Dict[str, Any] = ctx.get("config", {})
+
+    ema_slope_col = _get_param(config, "ema_slope_col", "ema_slope")
+    adx_col = _get_param(config, "adx_col", "adx")
+    mr_z_col = _get_param(config, "mr_z_col", "mr_z")
+    atr_col = _get_param(config, "atr_col", "atr_pips")
+
+    z_entry = float(_get_param(config, "z_entry", 2.0))
+    adx_max = _get_param(config, "adx_max", 20.0)
+    slope_th = float(_get_param(config, "slope_th", 0.01))
+    k_sl = float(_get_param(config, "k_sl", 2.0))
+    min_sl_points = float(_get_param(config, "min_sl_points", 5.0))
+    k_tp = config.get("k_tp", None)
+    min_tp_points = float(_get_param(config, "min_tp_points", 5.0))
+
+    adx_value = _read_value(cols[adx_col], idx)
+    z_value = _read_value(cols[mr_z_col], idx)
+    slope_value = _read_value(cols[ema_slope_col], idx)
+    atr_value = _read_value(cols[atr_col], idx)
+
+    if atr_value is None and atr_col == "atr_pips":
+        # fallback: convert from price-ATR to pips if only "atr" exists
+        atr_price = _read_value(cols.get("atr"), idx) if "atr" in cols else None
+        pip_size = PIP_SIZES.get(symbol, 0.0001)
+        atr_value = (atr_price / pip_size) if atr_price is not None else None
+
+    gate_pass = True
+    if adx_value is None:
+        gate_pass = False
+    elif adx_max is not None and float(adx_value) >= float(adx_max):
+        gate_pass = False
+
+    if slope_value is None or abs(slope_value) >= slope_th:
+        gate_pass = False
+
+    tags: Dict[str, str] = {}
+
+    if z_value is None:
+        tags["z_bucket"] = "z_unknown"
+    elif z_value >= z_entry:
+        tags["z_bucket"] = "z_high_pos"
+    elif z_value <= -z_entry:
+        tags["z_bucket"] = "z_high_neg"
+    else:
+        tags["z_bucket"] = "z_neutral"
+
+    tags["gate"] = "gate_pass" if gate_pass else "gate_fail"
+
+    side = Side.FLAT
+    if gate_pass and z_value is not None:
+        if z_value >= z_entry:
+            side = Side.SHORT
+        elif z_value <= -z_entry:
+            side = Side.LONG
+
+    if side != Side.FLAT and atr_value is None:
+        tags["missing_atr"] = "true"
+        side = Side.FLAT
+
+    sl_points = None
+    if side != Side.FLAT:
+        sl_points = max(k_sl * atr_value, min_sl_points)
+
+    tp_points = None
+    if side != Side.FLAT and k_tp is not None:
+        tp_points = max(k_tp * atr_value, min_tp_points)
+
+    return SignalIntent(
+        strategy_id=STRATEGY_ID,
+        symbol=symbol,
+        side=side,
+        signal_time=current_time,
+        sl_points=sl_points,
+        tp_points=tp_points,
+        tags=tags,
+    )
+
+================
+File: strategies/s3_breakout_atr_regime_ema200.py
+================
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Dict, Optional, Set
+from data.fx import PIP_SIZES
+
+
+import numpy as np
+
+from desk_types import Side, SignalIntent
+
+STRATEGY_ID = "s3_breakout_atr_regime_ema200"
+
+
+def required_features() -> Set[str]:
+    return {
+        "high",
+        "low",
+        "close",
+        "atr",
+        "ema200",
+        "compression_z",
+        "breakout_high",
+        "breakout_low",
+    }
+
+
+def _get_param(config: Dict[str, Any], key: str, default: Any) -> Any:
+    return config.get(key, default)
+
+
+def _read_value(values: np.ndarray, idx: int) -> Optional[float]:
+    value = values[idx]
+    if value is None:
+        return None
+    if isinstance(value, (float, np.floating)) and np.isnan(value):
+        return None
+    return float(value)
+
+
+def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
+    cols: Dict[str, np.ndarray] = ctx["cols"]
+    idx: int = ctx["idx"]
+    symbol: str = ctx["symbol"]
+    current_time: datetime = ctx["current_time"]
+    config: Dict[str, Any] = ctx.get("config", {})
+
+    high_col = _get_param(config, "high_col", "high")
+    low_col = _get_param(config, "low_col", "low")
+    close_col = _get_param(config, "close_col", "close")
+    atr_col = _get_param(config, "atr_col", "atr_pips")
+    ema200_col = _get_param(config, "ema200_col", "ema200")
+    compression_z_col = _get_param(config, "compression_z_col", "compression_z")
+    breakout_high_col = _get_param(config, "breakout_high_col", "breakout_high")
+    breakout_low_col = _get_param(config, "breakout_low_col", "breakout_low")
+
+    compression_z_low = float(_get_param(config, "compression_z_low", -0.5))
+    k_sl = float(_get_param(config, "k_sl", 2.0))
+    min_sl_points = float(_get_param(config, "min_sl_points", 5.0))
+    k_tp = config.get("k_tp", None)
+    min_tp_points = float(_get_param(config, "min_tp_points", 5.0))
+    closes = cols[close_col]
+    highs = cols[high_col]
+    lows = cols[low_col]
+    atr_values = cols[atr_col]
+    ema200_value = _read_value(cols[ema200_col], idx)
+
+    atr_value = _read_value(atr_values, idx)
+    if atr_value is None and atr_col == "atr_pips":
+        # fallback: convert from price-ATR to pips if only "atr" exists
+        atr_price = _read_value(cols.get("atr"), idx) if "atr" in cols else None
+        pip_size = PIP_SIZES.get(symbol, 0.0001)
+        atr_value = (atr_price / pip_size) if atr_price is not None else None
+
+    close_value = _read_value(closes, idx)
+
+    tags: Dict[str, str] = {}
+
+    if close_value is None or atr_value is None or close_value == 0:
+        atr_pct_value = None
+    else:
+        atr_pct_value = atr_value / close_value * 100
+    compression_z = _read_value(cols[compression_z_col], idx)
+
+    compression_pass = False
+    if compression_z is not None and atr_pct_value is not None:
+        compression_pass = compression_z < compression_z_low
+
+    tags["compression"] = "compression_pass" if compression_pass else "compression_fail"
+
+    breakout_dir = "none"
+    range_high = _read_value(cols[breakout_high_col], idx)
+    range_low = _read_value(cols[breakout_low_col], idx)
+    if close_value is not None and range_high is not None and range_low is not None:
+        if close_value > range_high:
+            breakout_dir = "up"
+        elif close_value < range_low:
+            breakout_dir = "down"
+    tags["breakout_dir"] = breakout_dir
+
+    bias_pass = False
+    if ema200_value is not None and close_value is not None:
+        if breakout_dir == "up" and close_value > ema200_value:
+            bias_pass = True
+        elif breakout_dir == "down" and close_value < ema200_value:
+            bias_pass = True
+    tags["bias"] = "bias_pass" if bias_pass else "bias_fail"
+
+    side = Side.FLAT
+    if compression_pass and bias_pass:
+        if breakout_dir == "up":
+            side = Side.LONG
+        elif breakout_dir == "down":
+            side = Side.SHORT
+
+    if side != Side.FLAT and atr_value is None:
+        side = Side.FLAT
+
+    sl_points = None
+    if side != Side.FLAT:
+        sl_points = max(k_sl * atr_value, min_sl_points)
+
+    tp_points = None
+    if side != Side.FLAT and k_tp is not None:
+        tp_points = max(k_tp * atr_value, min_tp_points)
+
+    return SignalIntent(
+        strategy_id=STRATEGY_ID,
+        symbol=symbol,
+        side=side,
+        signal_time=current_time,
+        sl_points=sl_points,
+        tp_points=tp_points,
+        tags=tags,
+    )
+
+================
 File: tuning/worker.py
 ================
 from __future__ import annotations
@@ -32059,145 +32818,6 @@ def run_worker(
     result["trades_B_raw"] = trades_b
 
     return result
-
-================
-File: strategies/s3_breakout_atr_regime_ema200.py
-================
-from __future__ import annotations
-
-from datetime import datetime
-from typing import Any, Dict, Optional, Set
-from data.fx import PIP_SIZES
-
-
-import numpy as np
-
-from desk_types import Side, SignalIntent
-
-STRATEGY_ID = "s3_breakout_atr_regime_ema200"
-
-
-def required_features() -> Set[str]:
-    return {
-        "high",
-        "low",
-        "close",
-        "atr",
-        "ema200",
-        "compression_z",
-        "breakout_high",
-        "breakout_low",
-    }
-
-
-def _get_param(config: Dict[str, Any], key: str, default: Any) -> Any:
-    return config.get(key, default)
-
-
-def _read_value(values: np.ndarray, idx: int) -> Optional[float]:
-    value = values[idx]
-    if value is None:
-        return None
-    if isinstance(value, (float, np.floating)) and np.isnan(value):
-        return None
-    return float(value)
-
-
-def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
-    cols: Dict[str, np.ndarray] = ctx["cols"]
-    idx: int = ctx["idx"]
-    symbol: str = ctx["symbol"]
-    current_time: datetime = ctx["current_time"]
-    config: Dict[str, Any] = ctx.get("config", {})
-
-    high_col = _get_param(config, "high_col", "high")
-    low_col = _get_param(config, "low_col", "low")
-    close_col = _get_param(config, "close_col", "close")
-    atr_col = _get_param(config, "atr_col", "atr_pips")
-    ema200_col = _get_param(config, "ema200_col", "ema200")
-    compression_z_col = _get_param(config, "compression_z_col", "compression_z")
-    breakout_high_col = _get_param(config, "breakout_high_col", "breakout_high")
-    breakout_low_col = _get_param(config, "breakout_low_col", "breakout_low")
-
-    compression_z_low = float(_get_param(config, "compression_z_low", -0.5))
-    k_sl = float(_get_param(config, "k_sl", 2.0))
-    min_sl_points = float(_get_param(config, "min_sl_points", 5.0))
-    k_tp = config.get("k_tp", None)
-    min_tp_points = float(_get_param(config, "min_tp_points", 5.0))
-    closes = cols[close_col]
-    highs = cols[high_col]
-    lows = cols[low_col]
-    atr_values = cols[atr_col]
-    ema200_value = _read_value(cols[ema200_col], idx)
-
-    atr_value = _read_value(atr_values, idx)
-    if atr_value is None and atr_col == "atr_pips":
-        # fallback: convert from price-ATR to pips if only "atr" exists
-        atr_price = _read_value(cols.get("atr"), idx) if "atr" in cols else None
-        pip_size = PIP_SIZES.get(symbol, 0.0001)
-        atr_value = (atr_price / pip_size) if atr_price is not None else None
-
-    close_value = _read_value(closes, idx)
-
-    tags: Dict[str, str] = {}
-
-    if close_value is None or atr_value is None or close_value == 0:
-        atr_pct_value = None
-    else:
-        atr_pct_value = atr_value / close_value * 100
-    compression_z = _read_value(cols[compression_z_col], idx)
-
-    compression_pass = False
-    if compression_z is not None and atr_pct_value is not None:
-        compression_pass = compression_z < compression_z_low
-
-    tags["compression"] = "compression_pass" if compression_pass else "compression_fail"
-
-    breakout_dir = "none"
-    range_high = _read_value(cols[breakout_high_col], idx)
-    range_low = _read_value(cols[breakout_low_col], idx)
-    if close_value is not None and range_high is not None and range_low is not None:
-        if close_value > range_high:
-            breakout_dir = "up"
-        elif close_value < range_low:
-            breakout_dir = "down"
-    tags["breakout_dir"] = breakout_dir
-
-    bias_pass = False
-    if ema200_value is not None and close_value is not None:
-        if breakout_dir == "up" and close_value > ema200_value:
-            bias_pass = True
-        elif breakout_dir == "down" and close_value < ema200_value:
-            bias_pass = True
-    tags["bias"] = "bias_pass" if bias_pass else "bias_fail"
-
-    side = Side.FLAT
-    if compression_pass and bias_pass:
-        if breakout_dir == "up":
-            side = Side.LONG
-        elif breakout_dir == "down":
-            side = Side.SHORT
-
-    if side != Side.FLAT and atr_value is None:
-        side = Side.FLAT
-
-    sl_points = None
-    if side != Side.FLAT:
-        sl_points = max(k_sl * atr_value, min_sl_points)
-
-    tp_points = None
-    if side != Side.FLAT and k_tp is not None:
-        tp_points = max(k_tp * atr_value, min_tp_points)
-
-    return SignalIntent(
-        strategy_id=STRATEGY_ID,
-        symbol=symbol,
-        side=side,
-        signal_time=current_time,
-        sl_points=sl_points,
-        tp_points=tp_points,
-        tags=tags,
-    )
 
 ================
 File: tests/test_backtest.py
@@ -32449,472 +33069,6 @@ def test_orchestrator_multiple_scenarios(df_eurusd_1min_1000):
     assert "C" in by_scenario, "Scenario C missing"
     assert "B" not in by_scenario, "Scenario B should not be present"
     assert len(by_scenario) == 2, f"Expected 2 scenarios, got {len(by_scenario)}"
-
-================
-File: strategies/s2_mr_zscore_ema_regime.py
-================
-from __future__ import annotations
-
-from datetime import datetime
-from typing import Any, Dict, Optional, Set
-from data.fx import PIP_SIZES
-
-
-import numpy as np
-
-from desk_types import Side, SignalIntent
-STRATEGY_ID = "s2_mr_zscore_ema_regime"
-
-
-def required_features() -> Set[str]:
-    return {"close", "ema_base", "ema_slope", "adx", "mr_z", "atr"}
-
-
-def _get_param(config: Dict[str, Any], key: str, default: Any) -> Any:
-    return config.get(key, default)
-
-
-def _read_value(values: np.ndarray, idx: int) -> Optional[float]:
-    value = values[idx]
-    if value is None:
-        return None
-    if isinstance(value, (float, np.floating)) and np.isnan(value):
-        return None
-    return float(value)
-
-
-def generate_signal(ctx: Dict[str, Any]) -> SignalIntent:
-    cols: Dict[str, np.ndarray] = ctx["cols"]
-    idx: int = ctx["idx"]
-    symbol: str = ctx["symbol"]
-    current_time: datetime = ctx["current_time"]
-    config: Dict[str, Any] = ctx.get("config", {})
-
-    ema_slope_col = _get_param(config, "ema_slope_col", "ema_slope")
-    adx_col = _get_param(config, "adx_col", "adx")
-    mr_z_col = _get_param(config, "mr_z_col", "mr_z")
-    atr_col = _get_param(config, "atr_col", "atr_pips")
-
-    z_entry = float(_get_param(config, "z_entry", 2.0))
-    adx_max = _get_param(config, "adx_max", 20.0)
-    slope_th = float(_get_param(config, "slope_th", 0.01))
-    k_sl = float(_get_param(config, "k_sl", 2.0))
-    min_sl_points = float(_get_param(config, "min_sl_points", 5.0))
-    k_tp = config.get("k_tp", None)
-    min_tp_points = float(_get_param(config, "min_tp_points", 5.0))
-
-    adx_value = _read_value(cols[adx_col], idx)
-    z_value = _read_value(cols[mr_z_col], idx)
-    slope_value = _read_value(cols[ema_slope_col], idx)
-    atr_value = _read_value(cols[atr_col], idx)
-
-    if atr_value is None and atr_col == "atr_pips":
-        # fallback: convert from price-ATR to pips if only "atr" exists
-        atr_price = _read_value(cols.get("atr"), idx) if "atr" in cols else None
-        pip_size = PIP_SIZES.get(symbol, 0.0001)
-        atr_value = (atr_price / pip_size) if atr_price is not None else None
-
-    gate_pass = True
-    if adx_value is None:
-        gate_pass = False
-    elif adx_max is not None and float(adx_value) >= float(adx_max):
-        gate_pass = False
-
-    if slope_value is None or abs(slope_value) >= slope_th:
-        gate_pass = False
-
-    tags: Dict[str, str] = {}
-
-    if z_value is None:
-        tags["z_bucket"] = "z_unknown"
-    elif z_value >= z_entry:
-        tags["z_bucket"] = "z_high_pos"
-    elif z_value <= -z_entry:
-        tags["z_bucket"] = "z_high_neg"
-    else:
-        tags["z_bucket"] = "z_neutral"
-
-    tags["gate"] = "gate_pass" if gate_pass else "gate_fail"
-
-    side = Side.FLAT
-    if gate_pass and z_value is not None:
-        if z_value >= z_entry:
-            side = Side.SHORT
-        elif z_value <= -z_entry:
-            side = Side.LONG
-
-    if side != Side.FLAT and atr_value is None:
-        tags["missing_atr"] = "true"
-        side = Side.FLAT
-
-    sl_points = None
-    if side != Side.FLAT:
-        sl_points = max(k_sl * atr_value, min_sl_points)
-
-    tp_points = None
-    if side != Side.FLAT and k_tp is not None:
-        tp_points = max(k_tp * atr_value, min_tp_points)
-
-    return SignalIntent(
-        strategy_id=STRATEGY_ID,
-        symbol=symbol,
-        side=side,
-        signal_time=current_time,
-        sl_points=sl_points,
-        tp_points=tp_points,
-        tags=tags,
-    )
-
-================
-File: tests/anti_leakage/test_anti_leakage.py
-================
-import sys
-import inspect
-from types import ModuleType
-from datetime import datetime
-
-import numpy as np
-import pandas as pd
-
-from execution.fill_rules import get_fill_price
-from features.indicators import atr, ema, slope, zscore
-from features.regime import atr_pct_zscore, compute_atr_pct
-from backtest.trade_log import TRADE_LOG_COLUMNS
-from backtest.orchestrator import (
-    BacktestOrchestrator,
-    _StrategySpec,
-    _apply_strategy_features,
-    _compute_regime,
-    _run_scenario,
-)
-from configs.models import (
-    BarContract,
-    Config,
-    Costs,
-    MonteCarlo,
-    MonteCarlo1,
-    MonteCarlo2,
-    Outputs,
-    Reproducibility,
-    Risk,
-    RiskCaps,
-    SlippageModel,
-    Strategies,
-    Universe,
-    Validation,
-    WalkForward,
-)
-from desk_types import Side, SignalIntent
-from validation.filter_tuner import _apply_filters
-from strategies import s2_mr_zscore_ema_regime as s2_strategy
-
-
-def test_feature_functions_ignore_future_data() -> None:
-    series = pd.Series([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], dtype=float)
-    t = 5
-
-    ema_original = ema(series, 3).iat[t]
-    slope_original = slope(series, 3).iat[t]
-    zscore_original = zscore(series, 3).iat[t]
-
-    series_modified = series.copy()
-    series_modified.iloc[t + 1 :] = series_modified.iloc[t + 1 :] + 100
-
-    ema_modified = ema(series_modified, 3).iat[t]
-    slope_modified = slope(series_modified, 3).iat[t]
-    zscore_modified = zscore(series_modified, 3).iat[t]
-
-    assert np.isclose(ema_original, ema_modified, equal_nan=True)
-    assert np.isclose(slope_original, slope_modified, equal_nan=True)
-    assert np.isclose(zscore_original, zscore_modified, equal_nan=True)
-
-    df = pd.DataFrame(
-        {
-            "high": [10.0, 11.0, 12.0, 13.0],
-            "low": [9.0, 10.0, 11.0, 12.0],
-            "close": [9.5, 10.5, 11.5, 12.5],
-        }
-    )
-    atr_original = atr(df, 2).iat[2]
-    df_modified = df.copy()
-    df_modified.loc[3, "high"] = 99.0
-    df_modified.loc[3, "low"] = 1.0
-    df_modified.loc[3, "close"] = 50.0
-    atr_modified = atr(df_modified, 2).iat[2]
-    assert np.isclose(atr_original, atr_modified, equal_nan=True)
-
-
-def test_atr_pct_and_regime_ignore_future_data() -> None:
-    df = pd.DataFrame(
-        {
-            "open": [10.0, 10.2, 10.4, 10.3, 10.6, 10.8, 11.0, 11.1],
-            "high": [10.5, 10.6, 10.8, 10.7, 11.0, 11.2, 11.4, 11.5],
-            "low": [9.8, 10.0, 10.2, 10.1, 10.4, 10.6, 10.8, 10.9],
-            "close": [10.1, 10.3, 10.5, 10.4, 10.7, 10.9, 11.1, 11.2],
-        }
-    )
-    t = 5
-    atr_n = 3
-    window = 3
-
-    atr_pct_original = compute_atr_pct(df, atr_n=atr_n).iat[t]
-    regime_original = _compute_regime(df, window=window, atr_n=atr_n).iat[t]
-
-    df_modified = df.copy()
-    df_modified.loc[t + 1 :, "high"] = df_modified.loc[t + 1 :, "high"] + 50.0
-    df_modified.loc[t + 1 :, "low"] = df_modified.loc[t + 1 :, "low"] - 50.0
-    df_modified.loc[t + 1 :, "close"] = df_modified.loc[t + 1 :, "close"] + 25.0
-
-    atr_pct_modified = compute_atr_pct(df_modified, atr_n=atr_n).iat[t]
-    regime_modified = _compute_regime(df_modified, window=window, atr_n=atr_n).iat[t]
-
-    assert np.isclose(atr_pct_original, atr_pct_modified, equal_nan=True)
-    assert regime_original == regime_modified
-
-
-def test_s2_ema_slope_feature_ignores_future_data() -> None:
-    df = pd.DataFrame(
-        {
-            "open": [10.0, 10.2, 10.4, 10.3, 10.6, 10.8, 11.0],
-            "high": [10.5, 10.6, 10.8, 10.7, 11.0, 11.2, 11.4],
-            "low": [9.8, 10.0, 10.2, 10.1, 10.4, 10.6, 10.8],
-            "close": [10.1, 10.3, 10.5, 10.4, 10.7, 10.9, 11.1],
-        }
-    )
-    t = 4
-    spec = _StrategySpec(
-        name="S2_MR_ZSCORE_EMA_REGIME",
-        module=None,
-        params={"ema_regime": 3, "adx_period": 2, "slope_window": 3},
-    )
-
-    prepared = _apply_strategy_features(df.copy(), spec)
-    ema_slope_original = prepared["ema_slope"].iat[t]
-
-    df_modified = df.copy()
-    df_modified.loc[t + 1 :, "close"] = df_modified.loc[t + 1 :, "close"] + 50.0
-    prepared_modified = _apply_strategy_features(df_modified, spec)
-    ema_slope_modified = prepared_modified["ema_slope"].iat[t]
-
-    assert np.isclose(ema_slope_original, ema_slope_modified, equal_nan=True)
-
-
-def test_s2_mr_z_feature_and_signal_ignore_future_data() -> None:
-    df = pd.DataFrame(
-        {
-            "open": [10.0, 10.2, 10.4, 10.3, 10.6, 10.8, 11.0, 11.2],
-            "high": [10.5, 10.6, 10.8, 10.7, 11.0, 11.2, 11.4, 11.6],
-            "low": [9.8, 10.0, 10.2, 10.1, 10.4, 10.6, 10.8, 11.0],
-            "close": [10.1, 10.3, 10.5, 10.4, 10.7, 10.9, 11.1, 11.3],
-        }
-    )
-    t = 5
-    spec = _StrategySpec(
-        name="S2_MR_ZSCORE_EMA_REGIME",
-        module=None,
-        params={"ema_regime": 3, "adx_period": 3, "slope_window": 3, "z_window": 3},
-    )
-    prepared = _apply_strategy_features(df.copy(), spec)
-    mr_z_original = prepared["mr_z"].iat[t]
-    ctx = {
-        "cols": {col: prepared[col].to_numpy() for col in prepared.columns},
-        "idx": t,
-        "symbol": "EURUSD",
-        "current_time": datetime(2024, 1, 1),
-        "config": {"z_entry": 1.0, "adx_max": 50.0, "slope_th": 1.0},
-    }
-    signal_original = s2_strategy.generate_signal(ctx)
-
-    df_modified = df.copy()
-    df_modified.loc[t + 1 :, "close"] = df_modified.loc[t + 1 :, "close"] + 50.0
-    df_modified.loc[t + 1 :, "high"] = df_modified.loc[t + 1 :, "high"] + 50.0
-    df_modified.loc[t + 1 :, "low"] = df_modified.loc[t + 1 :, "low"] - 50.0
-    prepared_modified = _apply_strategy_features(df_modified, spec)
-    mr_z_modified = prepared_modified["mr_z"].iat[t]
-    ctx["cols"] = {col: prepared_modified[col].to_numpy() for col in prepared_modified.columns}
-    signal_modified = s2_strategy.generate_signal(ctx)
-
-    assert np.isclose(mr_z_original, mr_z_modified, equal_nan=True)
-    assert signal_original == signal_modified
-
-
-def test_bar_contract_fill_is_open_next() -> None:
-    df = pd.DataFrame({"open": [1.1, 1.2, 1.3]})
-    assert get_fill_price(df, idx_t=0, side="buy") == 1.2
-
-
-def test_atr_pct_zscore_uses_rolling_window() -> None:
-    series = pd.Series([0.5, 1.0, 0.8, 1.2, 1.5, 0.9, 1.1, 1.3, 1.4, 1.6], dtype=float)
-    window = 5
-    t = 6
-
-    original = atr_pct_zscore(series, window=window).iat[t]
-
-    modified = series.copy()
-    modified.iloc[t + 1 :] = modified.iloc[t + 1 :] + 100
-
-    recomputed = atr_pct_zscore(modified, window=window).iat[t]
-    assert np.isclose(original, recomputed, equal_nan=True)
-
-
-def test_breakout_filter_uses_train_only_percentiles() -> None:
-    df = pd.DataFrame(
-        {
-            "atr_pct": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-            "pnl": [0.1] * 8,
-        }
-    )
-    train_idx = range(0, 4)
-    val_idx = range(4, 6)
-    params = {"atr_pct_percentile_low": 0.2, "atr_pct_percentile_high": 0.8, "spike_block": False}
-
-    baseline = _apply_filters("S3_BREAKOUT_ATR_REGIME_EMA200", params, df, train_idx, val_idx)
-
-    df_modified = df.copy()
-    df_modified.loc[list(val_idx), "atr_pct"] = [500.0, 600.0]
-
-    recomputed = _apply_filters("S3_BREAKOUT_ATR_REGIME_EMA200", params, df_modified, train_idx, val_idx)
-
-    assert baseline["atr_pct"].tolist() == recomputed["atr_pct"].tolist()
-
-
-def test_trade_log_tracks_feature_time_bounds() -> None:
-    assert "features_max_time_used" in TRADE_LOG_COLUMNS
-
-    trade_log = pd.DataFrame(
-        [
-            {
-                "trade_id": 1,
-                "order_id": "o-1",
-                "symbol": "EURUSD",
-                "strategy_id": "s1",
-                "side": "long",
-                "qty": 1.0,
-                "signal_time": pd.Timestamp("2024-01-01T00:00:00Z"),
-                "signal_idx": 0,
-                "fill_time": pd.Timestamp("2024-01-01T00:05:00Z"),
-                "entry_price": 1.0,
-                "exit_time": pd.Timestamp("2024-01-01T00:10:00Z"),
-                "exit_price": 1.1,
-                "pnl": 0.1,
-                "pnl_pct": 0.1,
-                "spread_used": 0.0,
-                "slippage_used": 0.0,
-                "scenario": "A",
-                "regime_snapshot": "VOL=LOW|SPIKE=0",
-                "reason_codes": "",
-                "features_max_time_used": pd.Timestamp("2024-01-01T00:00:00Z"),
-            }
-        ]
-    )
-
-    assert (trade_log["features_max_time_used"] <= trade_log["signal_time"]).all()
-
-
-def _make_dummy_config() -> Config:
-    return Config(
-        universe=Universe(symbols=["EURUSD"], timeframe="M1"),
-        bar_contract=BarContract(signal_on="close", fill_on="open_next", allow_bar0=False),
-        strategies=Strategies(
-            enabled=["DUMMY_ANTI_LEAK"],
-            params={"DUMMY_ANTI_LEAK": {}},
-        ),
-        risk=Risk(
-            r_base=1.0,
-            caps=RiskCaps(per_strategy=100.0, per_symbol=100.0, usd_exposure_cap=1_000_000.0),
-            conflict_policy="priority",
-            priority_order=["DUMMY_ANTI_LEAK"],
-            dd_day_limit=1.0,
-            dd_week_limit=1.0,
-            max_execution_errors=1,
-        ),
-        costs=Costs(
-            spread_baseline_pips={"EURUSD": 0.0},
-            slippage=SlippageModel(
-                slip_base=0.0,
-                slip_k=0.0,
-                spike_tr_atr_th=10.0,
-                spike_mult=1.0,
-            ),
-            scenarios={"A": 1.0, "B": 1.0, "C": 1.0},
-        ),
-        validation=Validation(walk_forward=WalkForward(train=1, val=1, test=1), perturb_core_params_pct=0.0),
-        montecarlo=MonteCarlo(
-            mc1=MonteCarlo1(block_min=1, block_max=1, n_sims=1),
-            mc2=MonteCarlo2(spread_noise_range=(1.0, 1.0), slippage_noise_range=(1.0, 1.0), n_sims=1),
-        ),
-        outputs=Outputs(runs_dir="./runs", write_trades_csv=False, write_report_json=False, write_mc_json=False),
-        reproducibility=Reproducibility(random_seed=1),
-    )
-
-
-def _make_price_df(n_bars: int) -> pd.DataFrame:
-    close = pd.Series(range(n_bars), dtype=float)
-    return pd.DataFrame(
-        {
-            "open": close + 0.01,
-            "high": close + 0.05,
-            "low": close - 0.05,
-            "close": close,
-        }
-    )
-
-
-def test_orchestrator_strategies_do_not_see_future(monkeypatch) -> None:
-    module = ModuleType("dummy_strategy")
-    module.captured = []
-
-    def generate_signal(ctx):
-        cols = ctx["cols"]
-        last_close = float(cols["close"][ctx["idx"]])
-        side = Side.LONG if last_close > 100 else Side.SHORT
-        signal = SignalIntent(
-            strategy_id="dummy",
-            symbol=ctx["symbol"],
-            side=side,
-            signal_time=ctx["current_time"],
-            sl_points=1.0,
-            tp_points=None,
-            tags={"last_close": f"{last_close:.2f}"},
-        )
-        if ctx["idx"] == 50:
-            module.captured.append(signal)
-        return signal
-
-    module.generate_signal = generate_signal
-    monkeypatch.setitem(sys.modules, "dummy_strategy", module)
-
-    from backtest import orchestrator as orchestrator_module
-
-    monkeypatch.setattr(
-        orchestrator_module,
-        "STRATEGY_MAP",
-        {**orchestrator_module.STRATEGY_MAP, "DUMMY_ANTI_LEAK": "dummy_strategy"},
-    )
-
-    orchestrator = BacktestOrchestrator()
-    config = _make_dummy_config()
-
-    df = _make_price_df(100)
-    module.captured = []
-    orchestrator.run({"EURUSD": df}, config)
-    assert module.captured
-    baseline = module.captured[0].to_dict()
-
-    df_modified = df.copy()
-    df_modified.loc[80:, ["open", "high", "low", "close"]] += 200.0
-    module.captured = []
-    orchestrator.run({"EURUSD": df_modified}, config)
-    assert module.captured
-    modified = module.captured[0].to_dict()
-
-    assert baseline == modified
-
-
-def test_orchestrator_loop_avoids_hist_copy() -> None:
-    source = inspect.getsource(_run_scenario)
-    assert "df.iloc[: idx + 1]" not in source
-    assert "df_hist" not in source
 
 ================
 File: scripts/run_tuning_mp.py

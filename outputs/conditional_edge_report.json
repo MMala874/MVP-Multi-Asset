@@ -1,0 +1,577 @@
+{
+  "decision": "REJECT EDGE",
+  "stability_report": {
+    "folds": 16,
+    "stable_features_before_corr_drop": 15,
+    "dropped_for_high_correlation": [
+      "RANGE_COMPRESSION"
+    ],
+    "final_stable_features": [
+      "micro_consecutive_direction_count_5",
+      "micro_vol_contraction_count_5",
+      "pos_dist_prev_day_high_z",
+      "pos_wick_body_ratio",
+      "trend_dist_ema50_z50",
+      "vol_atr_ratio",
+      "vol_compression_score",
+      "vol_expansion_ratio",
+      "vol_realized_vol_z20",
+      "micro_short_momentum_burst_3",
+      "pos_range50_percentile",
+      "time_bar_index_in_day_norm",
+      "trend_ema50_slope_norm",
+      "trend_reg_slope_20"
+    ]
+  },
+  "feature_importance_stability": [
+    {
+      "model": "logistic_regression",
+      "feature": "pos_wick_body_ratio",
+      "top10_hits": 16,
+      "fold_fraction": 1.0,
+      "mean_abs_shap": 0.006839
+    },
+    {
+      "model": "logistic_regression",
+      "feature": "micro_vol_contraction_count_5",
+      "top10_hits": 16,
+      "fold_fraction": 1.0,
+      "mean_abs_shap": 0.0
+    },
+    {
+      "model": "logistic_regression",
+      "feature": "micro_consecutive_direction_count_5",
+      "top10_hits": 16,
+      "fold_fraction": 1.0,
+      "mean_abs_shap": 0.0
+    },
+    {
+      "model": "logistic_regression",
+      "feature": "vol_expansion_ratio",
+      "top10_hits": 16,
+      "fold_fraction": 1.0,
+      "mean_abs_shap": 0.0
+    },
+    {
+      "model": "logistic_regression",
+      "feature": "RANGE_COMPRESSION",
+      "top10_hits": 16,
+      "fold_fraction": 1.0,
+      "mean_abs_shap": 0.0
+    },
+    {
+      "model": "logistic_regression",
+      "feature": "vol_realized_vol_z20",
+      "top10_hits": 14,
+      "fold_fraction": 0.875,
+      "mean_abs_shap": 0.0
+    },
+    {
+      "model": "logistic_regression",
+      "feature": "vol_atr_ratio",
+      "top10_hits": 14,
+      "fold_fraction": 0.875,
+      "mean_abs_shap": 0.0
+    },
+    {
+      "model": "logistic_regression",
+      "feature": "trend_dist_ema50_z50",
+      "top10_hits": 13,
+      "fold_fraction": 0.8125,
+      "mean_abs_shap": 0.0
+    },
+    {
+      "model": "logistic_regression",
+      "feature": "pos_dist_prev_day_high_z",
+      "top10_hits": 13,
+      "fold_fraction": 0.8125,
+      "mean_abs_shap": 0.0
+    },
+    {
+      "model": "logistic_regression",
+      "feature": "vol_compression_score",
+      "top10_hits": 12,
+      "fold_fraction": 0.75,
+      "mean_abs_shap": 0.0
+    },
+    {
+      "model": "logistic_regression",
+      "feature": "pos_close_in_bar_01",
+      "top10_hits": 7,
+      "fold_fraction": 0.4375,
+      "mean_abs_shap": 0.0
+    },
+    {
+      "model": "logistic_regression",
+      "feature": "time_hour_cos",
+      "top10_hits": 3,
+      "fold_fraction": 0.1875,
+      "mean_abs_shap": 0.0
+    },
+    {
+      "model": "logistic_regression",
+      "feature": "pos_range50_percentile",
+      "top10_hits": 2,
+      "fold_fraction": 0.125,
+      "mean_abs_shap": 0.0
+    },
+    {
+      "model": "logistic_regression",
+      "feature": "time_hour_sin",
+      "top10_hits": 2,
+      "fold_fraction": 0.125,
+      "mean_abs_shap": 0.0
+    },
+    {
+      "model": "xgboost_d3",
+      "feature": "trend_ema50_slope_norm",
+      "top10_hits": 15,
+      "fold_fraction": 0.9375,
+      "mean_abs_shap": 0.082377
+    },
+    {
+      "model": "xgboost_d3",
+      "feature": "pos_range50_percentile",
+      "top10_hits": 15,
+      "fold_fraction": 0.9375,
+      "mean_abs_shap": 0.073667
+    },
+    {
+      "model": "xgboost_d3",
+      "feature": "trend_dist_ema50_z50",
+      "top10_hits": 15,
+      "fold_fraction": 0.9375,
+      "mean_abs_shap": 0.06838
+    },
+    {
+      "model": "xgboost_d3",
+      "feature": "pos_dist_prev_day_high_z",
+      "top10_hits": 15,
+      "fold_fraction": 0.9375,
+      "mean_abs_shap": 0.062362
+    },
+    {
+      "model": "xgboost_d3",
+      "feature": "vol_atr_ratio",
+      "top10_hits": 14,
+      "fold_fraction": 0.875,
+      "mean_abs_shap": 0.061307
+    },
+    {
+      "model": "xgboost_d3",
+      "feature": "trend_reg_slope_20",
+      "top10_hits": 13,
+      "fold_fraction": 0.8125,
+      "mean_abs_shap": 0.059533
+    },
+    {
+      "model": "xgboost_d3",
+      "feature": "vol_compression_score",
+      "top10_hits": 12,
+      "fold_fraction": 0.75,
+      "mean_abs_shap": 0.051956
+    },
+    {
+      "model": "xgboost_d3",
+      "feature": "vol_realized_vol_z20",
+      "top10_hits": 12,
+      "fold_fraction": 0.75,
+      "mean_abs_shap": 0.044095
+    },
+    {
+      "model": "xgboost_d3",
+      "feature": "micro_short_momentum_burst_3",
+      "top10_hits": 11,
+      "fold_fraction": 0.6875,
+      "mean_abs_shap": 0.047077
+    },
+    {
+      "model": "xgboost_d3",
+      "feature": "time_bar_index_in_day_norm",
+      "top10_hits": 10,
+      "fold_fraction": 0.625,
+      "mean_abs_shap": 0.069683
+    },
+    {
+      "model": "xgboost_d3",
+      "feature": "pos_close_in_bar_01",
+      "top10_hits": 9,
+      "fold_fraction": 0.5625,
+      "mean_abs_shap": 0.048284
+    },
+    {
+      "model": "xgboost_d3",
+      "feature": "time_hour_cos",
+      "top10_hits": 4,
+      "fold_fraction": 0.25,
+      "mean_abs_shap": 0.039276
+    },
+    {
+      "model": "xgboost_d3",
+      "feature": "micro_vol_contraction_count_5",
+      "top10_hits": 4,
+      "fold_fraction": 0.25,
+      "mean_abs_shap": 0.022677
+    },
+    {
+      "model": "xgboost_d3",
+      "feature": "trend_reg_r2_20",
+      "top10_hits": 3,
+      "fold_fraction": 0.1875,
+      "mean_abs_shap": 0.02837
+    },
+    {
+      "model": "xgboost_d3",
+      "feature": "vol_range_percentile_30d",
+      "top10_hits": 3,
+      "fold_fraction": 0.1875,
+      "mean_abs_shap": 0.026107
+    },
+    {
+      "model": "xgboost_d3",
+      "feature": "time_hour_sin",
+      "top10_hits": 3,
+      "fold_fraction": 0.1875,
+      "mean_abs_shap": 0.023373
+    },
+    {
+      "model": "xgboost_d3",
+      "feature": "vol_expansion_ratio",
+      "top10_hits": 1,
+      "fold_fraction": 0.0625,
+      "mean_abs_shap": 0.018144
+    },
+    {
+      "model": "xgboost_d3",
+      "feature": "pos_wick_body_ratio",
+      "top10_hits": 1,
+      "fold_fraction": 0.0625,
+      "mean_abs_shap": 0.017904
+    }
+  ],
+  "per_year_performance": [
+    {
+      "test_year": 2010,
+      "model": "logistic_regression",
+      "baseline_tp_rate": 0.454432,
+      "region_tp_rate": NaN,
+      "lift_abs": NaN,
+      "lift_ratio": NaN,
+      "auc": 0.497851,
+      "region_coverage": 0.0
+    },
+    {
+      "test_year": 2010,
+      "model": "xgboost_d3",
+      "baseline_tp_rate": 0.454432,
+      "region_tp_rate": 0.473354,
+      "lift_abs": 0.018922,
+      "lift_ratio": 1.041639,
+      "auc": 0.53314,
+      "region_coverage": 0.238297
+    },
+    {
+      "test_year": 2011,
+      "model": "logistic_regression",
+      "baseline_tp_rate": 0.467489,
+      "region_tp_rate": NaN,
+      "lift_abs": NaN,
+      "lift_ratio": NaN,
+      "auc": 0.502844,
+      "region_coverage": 0.0
+    },
+    {
+      "test_year": 2011,
+      "model": "xgboost_d3",
+      "baseline_tp_rate": 0.467489,
+      "region_tp_rate": 0.479665,
+      "lift_abs": 0.012176,
+      "lift_ratio": 1.026045,
+      "auc": 0.522514,
+      "region_coverage": 0.198386
+    },
+    {
+      "test_year": 2012,
+      "model": "logistic_regression",
+      "baseline_tp_rate": 0.447318,
+      "region_tp_rate": NaN,
+      "lift_abs": NaN,
+      "lift_ratio": NaN,
+      "auc": 0.498496,
+      "region_coverage": 0.0
+    },
+    {
+      "test_year": 2012,
+      "model": "xgboost_d3",
+      "baseline_tp_rate": 0.447318,
+      "region_tp_rate": 0.537829,
+      "lift_abs": 0.090511,
+      "lift_ratio": 1.202343,
+      "auc": 0.547452,
+      "region_coverage": 0.146931
+    },
+    {
+      "test_year": 2013,
+      "model": "logistic_regression",
+      "baseline_tp_rate": 0.456743,
+      "region_tp_rate": NaN,
+      "lift_abs": NaN,
+      "lift_ratio": NaN,
+      "auc": 0.501336,
+      "region_coverage": 0.0
+    },
+    {
+      "test_year": 2013,
+      "model": "xgboost_d3",
+      "baseline_tp_rate": 0.456743,
+      "region_tp_rate": 0.465665,
+      "lift_abs": 0.008922,
+      "lift_ratio": 1.019534,
+      "auc": 0.519381,
+      "region_coverage": 0.118575
+    },
+    {
+      "test_year": 2014,
+      "model": "logistic_regression",
+      "baseline_tp_rate": 0.44062,
+      "region_tp_rate": NaN,
+      "lift_abs": NaN,
+      "lift_ratio": NaN,
+      "auc": 0.502795,
+      "region_coverage": 0.0
+    },
+    {
+      "test_year": 2014,
+      "model": "xgboost_d3",
+      "baseline_tp_rate": 0.44062,
+      "region_tp_rate": 0.511429,
+      "lift_abs": 0.070808,
+      "lift_ratio": 1.160702,
+      "auc": 0.550435,
+      "region_coverage": 0.09196
+    },
+    {
+      "test_year": 2015,
+      "model": "logistic_regression",
+      "baseline_tp_rate": 0.4424,
+      "region_tp_rate": NaN,
+      "lift_abs": NaN,
+      "lift_ratio": NaN,
+      "auc": 0.502348,
+      "region_coverage": 0.0
+    },
+    {
+      "test_year": 2015,
+      "model": "xgboost_d3",
+      "baseline_tp_rate": 0.4424,
+      "region_tp_rate": 0.486804,
+      "lift_abs": 0.044404,
+      "lift_ratio": 1.10037,
+      "auc": 0.498758,
+      "region_coverage": 0.085959
+    },
+    {
+      "test_year": 2016,
+      "model": "logistic_regression",
+      "baseline_tp_rate": 0.455814,
+      "region_tp_rate": NaN,
+      "lift_abs": NaN,
+      "lift_ratio": NaN,
+      "auc": 0.50041,
+      "region_coverage": 0.0
+    },
+    {
+      "test_year": 2016,
+      "model": "xgboost_d3",
+      "baseline_tp_rate": 0.455814,
+      "region_tp_rate": 0.523636,
+      "lift_abs": 0.067822,
+      "lift_ratio": 1.148794,
+      "auc": 0.530156,
+      "region_coverage": 0.067319
+    },
+    {
+      "test_year": 2017,
+      "model": "logistic_regression",
+      "baseline_tp_rate": 0.439495,
+      "region_tp_rate": NaN,
+      "lift_abs": NaN,
+      "lift_ratio": NaN,
+      "auc": 0.496691,
+      "region_coverage": 0.0
+    },
+    {
+      "test_year": 2017,
+      "model": "xgboost_d3",
+      "baseline_tp_rate": 0.439495,
+      "region_tp_rate": 0.519608,
+      "lift_abs": 0.080113,
+      "lift_ratio": 1.182283,
+      "auc": 0.51774,
+      "region_coverage": 0.050483
+    },
+    {
+      "test_year": 2018,
+      "model": "logistic_regression",
+      "baseline_tp_rate": 0.435493,
+      "region_tp_rate": NaN,
+      "lift_abs": NaN,
+      "lift_ratio": NaN,
+      "auc": 0.504046,
+      "region_coverage": 0.0
+    },
+    {
+      "test_year": 2018,
+      "model": "xgboost_d3",
+      "baseline_tp_rate": 0.435493,
+      "region_tp_rate": 0.424528,
+      "lift_abs": -0.010964,
+      "lift_ratio": 0.974823,
+      "auc": 0.509035,
+      "region_coverage": 0.028373
+    },
+    {
+      "test_year": 2019,
+      "model": "logistic_regression",
+      "baseline_tp_rate": 0.431512,
+      "region_tp_rate": NaN,
+      "lift_abs": NaN,
+      "lift_ratio": NaN,
+      "auc": 0.505355,
+      "region_coverage": 0.0
+    },
+    {
+      "test_year": 2019,
+      "model": "xgboost_d3",
+      "baseline_tp_rate": 0.431512,
+      "region_tp_rate": 0.574627,
+      "lift_abs": 0.143115,
+      "lift_ratio": 1.331659,
+      "auc": 0.541949,
+      "region_coverage": 0.032835
+    },
+    {
+      "test_year": 2020,
+      "model": "logistic_regression",
+      "baseline_tp_rate": 0.451241,
+      "region_tp_rate": NaN,
+      "lift_abs": NaN,
+      "lift_ratio": NaN,
+      "auc": 0.49914,
+      "region_coverage": 0.0
+    },
+    {
+      "test_year": 2020,
+      "model": "xgboost_d3",
+      "baseline_tp_rate": 0.451241,
+      "region_tp_rate": 0.666667,
+      "lift_abs": 0.215426,
+      "lift_ratio": 1.477407,
+      "auc": 0.554438,
+      "region_coverage": 0.056405
+    },
+    {
+      "test_year": 2021,
+      "model": "logistic_regression",
+      "baseline_tp_rate": 0.416956,
+      "region_tp_rate": NaN,
+      "lift_abs": NaN,
+      "lift_ratio": NaN,
+      "auc": 0.500968,
+      "region_coverage": 0.0
+    },
+    {
+      "test_year": 2021,
+      "model": "xgboost_d3",
+      "baseline_tp_rate": 0.416956,
+      "region_tp_rate": 0.548507,
+      "lift_abs": 0.131552,
+      "lift_ratio": 1.315505,
+      "auc": 0.562545,
+      "region_coverage": 0.066435
+    },
+    {
+      "test_year": 2022,
+      "model": "logistic_regression",
+      "baseline_tp_rate": 0.447214,
+      "region_tp_rate": NaN,
+      "lift_abs": NaN,
+      "lift_ratio": NaN,
+      "auc": 0.497858,
+      "region_coverage": 0.0
+    },
+    {
+      "test_year": 2022,
+      "model": "xgboost_d3",
+      "baseline_tp_rate": 0.447214,
+      "region_tp_rate": 0.481183,
+      "lift_abs": 0.033969,
+      "lift_ratio": 1.075956,
+      "auc": 0.536174,
+      "region_coverage": 0.090909
+    },
+    {
+      "test_year": 2023,
+      "model": "logistic_regression",
+      "baseline_tp_rate": 0.438256,
+      "region_tp_rate": NaN,
+      "lift_abs": NaN,
+      "lift_ratio": NaN,
+      "auc": 0.499881,
+      "region_coverage": 0.0
+    },
+    {
+      "test_year": 2023,
+      "model": "xgboost_d3",
+      "baseline_tp_rate": 0.438256,
+      "region_tp_rate": 0.569659,
+      "lift_abs": 0.131404,
+      "lift_ratio": 1.299834,
+      "auc": 0.557774,
+      "region_coverage": 0.076558
+    },
+    {
+      "test_year": 2024,
+      "model": "logistic_regression",
+      "baseline_tp_rate": 0.41742,
+      "region_tp_rate": NaN,
+      "lift_abs": NaN,
+      "lift_ratio": NaN,
+      "auc": 0.502068,
+      "region_coverage": 0.0
+    },
+    {
+      "test_year": 2024,
+      "model": "xgboost_d3",
+      "baseline_tp_rate": 0.41742,
+      "region_tp_rate": 0.481203,
+      "lift_abs": 0.063783,
+      "lift_ratio": 1.152802,
+      "auc": 0.551156,
+      "region_coverage": 0.063303
+    },
+    {
+      "test_year": 2025,
+      "model": "logistic_regression",
+      "baseline_tp_rate": 0.444999,
+      "region_tp_rate": NaN,
+      "lift_abs": NaN,
+      "lift_ratio": NaN,
+      "auc": 0.501688,
+      "region_coverage": 0.0
+    },
+    {
+      "test_year": 2025,
+      "model": "xgboost_d3",
+      "baseline_tp_rate": 0.444999,
+      "region_tp_rate": 0.594378,
+      "lift_abs": 0.149379,
+      "lift_ratio": 1.335683,
+      "auc": 0.549051,
+      "region_coverage": 0.059159
+    }
+  ],
+  "top_stable_feature_interactions": [],
+  "regions_consistent_ptp_gt_055": [],
+  "event_types_persistent_skew": []
+}
