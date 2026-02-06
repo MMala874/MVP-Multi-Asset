@@ -1,22 +1,15 @@
-"""Research dataset builders for structural edge discovery."""
+"""Structural distribution shift discovery utilities."""
 
-from edge_discovery.dataset_builder import build_research_dataset
+from edge_discovery.dataset_builder import build_shift_dataset, build_research_dataset
 from edge_discovery.event_engine import compute_event_flags
-from edge_discovery.feature_engine import compute_normalized_features
-from edge_discovery.labeler import label_event_bars
+from edge_discovery.feature_engine import compute_features, compute_normalized_features
+from edge_discovery.forward_metrics import compute_forward_metrics
 
 __all__ = [
+    "build_shift_dataset",
     "build_research_dataset",
     "compute_event_flags",
+    "compute_features",
     "compute_normalized_features",
-    "label_event_bars",
+    "compute_forward_metrics",
 ]
-
-def run_conditional_edge_analysis(*args, **kwargs):
-    """
-    Lazy import to avoid forcing sklearn/xgboost dependencies for dataset-only workflows.
-    """
-    from edge_discovery.conditional_edge import run_conditional_edge_analysis as _fn
-    return _fn(*args, **kwargs)
-
-__all__.append("run_conditional_edge_analysis")
