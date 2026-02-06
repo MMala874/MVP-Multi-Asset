@@ -6,7 +6,9 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 
@@ -96,13 +98,26 @@ def _feature_columns(dataset: pd.DataFrame) -> list[str]:
 
 def _build_models(include_xgboost: bool = True, n_jobs: int | None = None) -> dict[str, Any]:
     models: dict[str, Any] = {
+        # NOTE: LR parallelism is version/solver dependent; we still keep it for baseline.
         "logistic_regression": LogisticRegression(
             solver="saga",
             max_iter=2000,
             random_state=42,
-            n_jobs=n_jobs,
         ),
-        "gradient_boosting_d3": GradientBoostingClassifier(max_depth=3, learning_rate=0.05, n_estimators=200, random_state=42),
+        # Classic GB is single-core; keep it but don't expect scaling.
+        "gradient_boosting_d3": GradientBoostingClassifier(
+            max_depth=3,
+            learning_rate=0.05,
+            n_estimators=200,
+            random_state=42,
+        ),
+        # This one is much faster and can leverage multi-threading internally.
+        "hist_gb": HistGradientBoostingClassifier(
+            max_depth=3,
+            learning_rate=0.05,
+            max_iter=300,
+            random_state=42,
+        ),
     }
 
     if include_xgboost:
@@ -112,7 +127,7 @@ def _build_models(include_xgboost: bool = True, n_jobs: int | None = None) -> di
             raise ImportError("XGBoost requested but package 'xgboost' is not installed") from exc
 
         models["xgboost_d3"] = XGBClassifier(
-            n_estimators=250,
+            n_estimators=600,
             learning_rate=0.03,
             max_depth=3,
             subsample=0.9,
@@ -182,51 +197,61 @@ def run_conditional_edge_analysis(
     fold_rows: list[FoldResult] = []
     shap_rows: list[pd.DataFrame] = []
 
-    for fold_id, (train_idx, test_idx, test_year) in enumerate(folds, start=1):
+    def _run_one(fold_id: int, train_idx: np.ndarray, test_idx: np.ndarray, test_year: int, model_name: str) -> tuple[FoldResult, pd.DataFrame]:
+        model = models[model_name]
         x_train, x_test = x_all.iloc[train_idx], x_all.iloc[test_idx]
         y_train, y_test = y_all.iloc[train_idx], y_all.iloc[test_idx]
 
-        for model_name, model in models.items():
-            model.fit(x_train, y_train)
-            proba = model.predict_proba(x_test)[:, 1]
-            baseline = float(y_test.mean())
-            region_mask = proba > prob_threshold
-            coverage = float(region_mask.mean())
-            if region_mask.any():
-                region_tp = float(y_test[region_mask].mean())
-            else:
-                region_tp = np.nan
-            lift_abs = float(region_tp - baseline) if not np.isnan(region_tp) else np.nan
-            lift_ratio = float(region_tp / baseline) if (not np.isnan(region_tp) and baseline > 0) else np.nan
+        model.fit(x_train, y_train)
+        proba = model.predict_proba(x_test)[:, 1]
+        baseline = float(y_test.mean())
+        region_mask = proba > prob_threshold
+        coverage = float(region_mask.mean())
+        region_tp = float(y_test[region_mask].mean()) if region_mask.any() else np.nan
+        lift_abs = float(region_tp - baseline) if not np.isnan(region_tp) else np.nan
+        lift_ratio = float(region_tp / baseline) if (not np.isnan(region_tp) and baseline > 0) else np.nan
 
-            try:
-                auc = float(roc_auc_score(y_test, proba))
-            except ValueError:
-                auc = np.nan
+        try:
+            auc = float(roc_auc_score(y_test, proba))
+        except ValueError:
+            auc = np.nan
 
-            fold_rows.append(
-                FoldResult(
-                    fold_id=fold_id,
-                    test_year=test_year,
-                    model=model_name,
-                    n_train=len(train_idx),
-                    n_test=len(test_idx),
-                    baseline_tp_rate=baseline,
-                    region_coverage=coverage,
-                    region_tp_rate=region_tp,
-                    lift_abs=lift_abs,
-                    lift_ratio=lift_ratio,
-                    auc=auc,
-                )
-            )
+        shap_importance = _mean_abs_shap_values(model, x_train, x_test)
+        shap_frame = shap_importance.reset_index()
+        shap_frame.columns = ["feature", "mean_abs_shap"]
+        shap_frame["fold_id"] = fold_id
+        shap_frame["test_year"] = test_year
+        shap_frame["model"] = model_name
 
-            shap_importance = _mean_abs_shap_values(model, x_train, x_test)
-            shap_frame = shap_importance.reset_index()
-            shap_frame.columns = ["feature", "mean_abs_shap"]
-            shap_frame["fold_id"] = fold_id
-            shap_frame["test_year"] = test_year
-            shap_frame["model"] = model_name
-            shap_rows.append(shap_frame)
+        return (
+            FoldResult(
+                fold_id=fold_id,
+                test_year=test_year,
+                model=model_name,
+                n_train=len(train_idx),
+                n_test=len(test_idx),
+                baseline_tp_rate=baseline,
+                region_coverage=coverage,
+                region_tp_rate=region_tp,
+                lift_abs=lift_abs,
+                lift_ratio=lift_ratio,
+                auc=auc,
+            ),
+            shap_frame,
+        )
+
+    jobs = []
+    for fold_id, (train_idx, test_idx, test_year) in enumerate(folds, start=1):
+        for model_name in models.keys():
+            jobs.append((fold_id, train_idx, test_idx, test_year, model_name))
+
+    results = Parallel(n_jobs=n_jobs or 1, backend="loky")(
+        delayed(_run_one)(fid, tr, te, yr, mn) for (fid, tr, te, yr, mn) in jobs
+    )
+
+    for fold_result, shap_frame in results:
+        fold_rows.append(fold_result)
+        shap_rows.append(shap_frame)
 
     performance = pd.DataFrame([r.__dict__ for r in fold_rows])
     shap_all = pd.concat(shap_rows, ignore_index=True)
