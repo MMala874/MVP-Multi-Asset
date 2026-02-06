@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -24,10 +25,16 @@ def main() -> None:
     parser.add_argument("--dataset", required=True, help="Path to research dataset CSV (must include label)")
     parser.add_argument("--output", default="outputs/conditional_edge_report.json", help="Output JSON report path")
     parser.add_argument("--no-xgboost", action="store_true", help="Disable XGBoost model")
+    parser.add_argument(
+        "--n_jobs",
+        type=int,
+        default=max(1, (os.cpu_count() or 1) - 2),
+        help="Number of CPU workers for supported models (default: max(1, os.cpu_count()-2))",
+    )
     args = parser.parse_args()
 
     ds = pd.read_csv(args.dataset)
-    report = run_conditional_edge_analysis(ds, include_xgboost=not args.no_xgboost)
+    report = run_conditional_edge_analysis(ds, include_xgboost=not args.no_xgboost, n_jobs=args.n_jobs)
 
     out_payload = {
         "decision": report["decision"],
