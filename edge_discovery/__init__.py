@@ -10,7 +10,13 @@ __all__ = [
     "compute_event_flags",
     "compute_normalized_features",
     "label_event_bars",
-    "run_conditional_edge_analysis",
 ]
 
-from edge_discovery.conditional_edge import run_conditional_edge_analysis
+def run_conditional_edge_analysis(*args, **kwargs):
+    """
+    Lazy import to avoid forcing sklearn/xgboost dependencies for dataset-only workflows.
+    """
+    from edge_discovery.conditional_edge import run_conditional_edge_analysis as _fn
+    return _fn(*args, **kwargs)
+
+__all__.append("run_conditional_edge_analysis")

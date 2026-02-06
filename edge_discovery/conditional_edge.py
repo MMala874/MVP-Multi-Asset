@@ -31,12 +31,19 @@ def _resolve_timestamp_index(dataset: pd.DataFrame) -> pd.DataFrame:
         out = dataset.copy()
         out = out.sort_index()
         return out
-    if "timestamp" not in dataset.columns:
-        raise ValueError("Dataset must have DatetimeIndex or 'timestamp' column")
+
     out = dataset.copy()
-    out["timestamp"] = pd.to_datetime(out["timestamp"], utc=False)
-    out = out.set_index("timestamp").sort_index()
-    return out
+    for col in ("timestamp", "time"):
+        if col not in out.columns:
+            continue
+        ts = pd.to_datetime(out[col], errors="coerce", utc=True)
+        if ts.isna().any():
+            continue
+        out[col] = ts
+        out = out.set_index(col).sort_index()
+        return out
+
+    raise ValueError("Dataset must have DatetimeIndex or parseable 'timestamp'/'time' column")
 
 
 def _build_rolling_folds(index: pd.DatetimeIndex, train_years: int = 3, test_years: int = 1, purge_bars: int = 10) -> list[tuple[np.ndarray, np.ndarray, int]]:
@@ -147,6 +154,11 @@ def run_conditional_edge_analysis(
     include_xgboost: bool = True,
     n_jobs: int | None = None,
 ) -> dict[str, Any]:
+    if n_jobs in (None, 0):
+        import os
+        n_jobs = max(1, (os.cpu_count() or 1) - 1)
+    n_jobs = max(1, int(n_jobs))
+
     data = _resolve_timestamp_index(dataset)
     if "label" not in data.columns:
         raise ValueError("Dataset must contain a 'label' column")
