@@ -6,7 +6,9 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import GradientBoostingClassifier
+from joblib import Parallel, delayed
+from sklearn.base import clone
+from sklearn.ensemble import GradientBoostingClassifier, HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 
@@ -103,6 +105,12 @@ def _build_models(include_xgboost: bool = True, n_jobs: int | None = None) -> di
             n_jobs=n_jobs,
         ),
         "gradient_boosting_d3": GradientBoostingClassifier(max_depth=3, learning_rate=0.05, n_estimators=200, random_state=42),
+        "hist_gradient_boosting_d3": HistGradientBoostingClassifier(
+            max_depth=3,
+            learning_rate=0.05,
+            max_iter=250,
+            random_state=42,
+        ),
     }
 
     if include_xgboost:
@@ -124,6 +132,60 @@ def _build_models(include_xgboost: bool = True, n_jobs: int | None = None) -> di
         )
 
     return models
+
+
+def _evaluate_fold_model(
+    fold_id: int,
+    test_year: int,
+    model_name: str,
+    model: Any,
+    x_train: pd.DataFrame,
+    x_test: pd.DataFrame,
+    y_train: pd.Series,
+    y_test: pd.Series,
+    prob_threshold: float,
+) -> tuple[FoldResult, pd.DataFrame]:
+    fitted_model = clone(model)
+    fitted_model.fit(x_train, y_train)
+    proba = fitted_model.predict_proba(x_test)[:, 1]
+
+    baseline = float(y_test.mean())
+    region_mask = proba > prob_threshold
+    coverage = float(region_mask.mean())
+    if region_mask.any():
+        region_tp = float(y_test[region_mask].mean())
+    else:
+        region_tp = np.nan
+    lift_abs = float(region_tp - baseline) if not np.isnan(region_tp) else np.nan
+    lift_ratio = float(region_tp / baseline) if (not np.isnan(region_tp) and baseline > 0) else np.nan
+
+    try:
+        auc = float(roc_auc_score(y_test, proba))
+    except ValueError:
+        auc = np.nan
+
+    fold_result = FoldResult(
+        fold_id=fold_id,
+        test_year=test_year,
+        model=model_name,
+        n_train=len(x_train),
+        n_test=len(x_test),
+        baseline_tp_rate=baseline,
+        region_coverage=coverage,
+        region_tp_rate=region_tp,
+        lift_abs=lift_abs,
+        lift_ratio=lift_ratio,
+        auc=auc,
+    )
+
+    shap_importance = _mean_abs_shap_values(fitted_model, x_train, x_test)
+    shap_frame = shap_importance.reset_index()
+    shap_frame.columns = ["feature", "mean_abs_shap"]
+    shap_frame["fold_id"] = fold_id
+    shap_frame["test_year"] = test_year
+    shap_frame["model"] = model_name
+
+    return fold_result, shap_frame
 
 
 def _mean_abs_shap_values(model: Any, x_train: pd.DataFrame, x_test: pd.DataFrame) -> pd.Series:
@@ -179,54 +241,19 @@ def run_conditional_edge_analysis(
 
     models = _build_models(include_xgboost=include_xgboost, n_jobs=n_jobs)
 
-    fold_rows: list[FoldResult] = []
-    shap_rows: list[pd.DataFrame] = []
-
+    jobs: list[tuple[int, int, str, Any, pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, float]] = []
     for fold_id, (train_idx, test_idx, test_year) in enumerate(folds, start=1):
         x_train, x_test = x_all.iloc[train_idx], x_all.iloc[test_idx]
         y_train, y_test = y_all.iloc[train_idx], y_all.iloc[test_idx]
-
         for model_name, model in models.items():
-            model.fit(x_train, y_train)
-            proba = model.predict_proba(x_test)[:, 1]
-            baseline = float(y_test.mean())
-            region_mask = proba > prob_threshold
-            coverage = float(region_mask.mean())
-            if region_mask.any():
-                region_tp = float(y_test[region_mask].mean())
-            else:
-                region_tp = np.nan
-            lift_abs = float(region_tp - baseline) if not np.isnan(region_tp) else np.nan
-            lift_ratio = float(region_tp / baseline) if (not np.isnan(region_tp) and baseline > 0) else np.nan
+            jobs.append((fold_id, test_year, model_name, model, x_train, x_test, y_train, y_test, prob_threshold))
 
-            try:
-                auc = float(roc_auc_score(y_test, proba))
-            except ValueError:
-                auc = np.nan
-
-            fold_rows.append(
-                FoldResult(
-                    fold_id=fold_id,
-                    test_year=test_year,
-                    model=model_name,
-                    n_train=len(train_idx),
-                    n_test=len(test_idx),
-                    baseline_tp_rate=baseline,
-                    region_coverage=coverage,
-                    region_tp_rate=region_tp,
-                    lift_abs=lift_abs,
-                    lift_ratio=lift_ratio,
-                    auc=auc,
-                )
-            )
-
-            shap_importance = _mean_abs_shap_values(model, x_train, x_test)
-            shap_frame = shap_importance.reset_index()
-            shap_frame.columns = ["feature", "mean_abs_shap"]
-            shap_frame["fold_id"] = fold_id
-            shap_frame["test_year"] = test_year
-            shap_frame["model"] = model_name
-            shap_rows.append(shap_frame)
+    results = Parallel(n_jobs=n_jobs, backend="loky")(
+        delayed(_evaluate_fold_model)(*job) for job in jobs
+    )
+    results_sorted = sorted(results, key=lambda row: (row[0].fold_id, row[0].model))
+    fold_rows = [row[0] for row in results_sorted]
+    shap_rows = [row[1] for row in results_sorted]
 
     performance = pd.DataFrame([r.__dict__ for r in fold_rows])
     shap_all = pd.concat(shap_rows, ignore_index=True)
