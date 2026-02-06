@@ -35,7 +35,7 @@ def test_conditional_edge_analysis_report_structure(monkeypatch) -> None:
     assert not report["per_year_performance"].empty
 
 
-def test_conditional_edge_ignores_time_string_column_and_coerces_numeric(monkeypatch) -> None:
+def test_conditional_edge_ignores_time_and_object_columns(monkeypatch) -> None:
     idx = pd.date_range("2016-01-01", "2023-12-31", freq="D")
     n = len(idx)
     rng = np.random.default_rng(7)
@@ -58,4 +58,5 @@ def test_conditional_edge_ignores_time_string_column_and_coerces_numeric(monkeyp
 
     features = set(report["feature_importance_stability"]["feature"].unique().tolist())
     assert "time" not in features
+    assert "feature_with_strings" not in features
     assert report["stability_report"]["folds"] >= 3

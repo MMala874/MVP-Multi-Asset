@@ -76,13 +76,22 @@ def _feature_columns(dataset: pd.DataFrame) -> list[str]:
         "timestamp",
         "time",
     }
-    cols = [c for c in dataset.columns if c not in excluded]
+    cols = [
+        c
+        for c in dataset.columns
+        if c not in excluded and pd.api.types.is_numeric_dtype(dataset[c])
+    ]
     return cols
 
 
-def _build_models(include_xgboost: bool = True) -> dict[str, Any]:
+def _build_models(include_xgboost: bool = True, n_jobs: int | None = None) -> dict[str, Any]:
     models: dict[str, Any] = {
-        "logistic_regression": LogisticRegression(max_iter=1000, random_state=42),
+        "logistic_regression": LogisticRegression(
+            solver="saga",
+            max_iter=2000,
+            random_state=42,
+            n_jobs=n_jobs,
+        ),
         "gradient_boosting_d3": GradientBoostingClassifier(max_depth=3, learning_rate=0.05, n_estimators=200, random_state=42),
     }
 
@@ -101,6 +110,7 @@ def _build_models(include_xgboost: bool = True) -> dict[str, Any]:
             objective="binary:logistic",
             eval_metric="logloss",
             random_state=42,
+            n_jobs=n_jobs,
         )
 
     return models
@@ -132,14 +142,14 @@ def run_conditional_edge_analysis(
     corr_threshold: float = 0.85,
     unstable_feature_min_fold_frac: float = 0.6,
     include_xgboost: bool = True,
+    n_jobs: int | None = None,
 ) -> dict[str, Any]:
     data = _resolve_timestamp_index(dataset)
     if "label" not in data.columns:
         raise ValueError("Dataset must contain a 'label' column")
 
     feature_cols = _feature_columns(data)
-    x_all = data[feature_cols].apply(pd.to_numeric, errors="coerce")
-    x_all = x_all.dropna(axis=1, how="all")
+    x_all = data[feature_cols].astype(np.float32)
     if x_all.empty:
         raise ValueError("Dataset has no usable numeric feature columns after preprocessing")
 
@@ -152,7 +162,7 @@ def run_conditional_edge_analysis(
     if not folds:
         raise ValueError("No rolling 3y/1y folds available in the provided dataset")
 
-    models = _build_models(include_xgboost=include_xgboost)
+    models = _build_models(include_xgboost=include_xgboost, n_jobs=n_jobs)
 
     fold_rows: list[FoldResult] = []
     shap_rows: list[pd.DataFrame] = []
