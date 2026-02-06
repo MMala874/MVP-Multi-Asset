@@ -33,17 +33,31 @@ def _resolve_timestamp_index(dataset: pd.DataFrame) -> pd.DataFrame:
         return out
 
     out = dataset.copy()
-    for col in ("timestamp", "time"):
-        if col not in out.columns:
-            continue
-        ts = pd.to_datetime(out[col], errors="coerce", utc=True)
-        if ts.isna().any():
-            continue
-        out[col] = ts
-        out = out.set_index(col).sort_index()
-        return out
+    source_col: str | None = None
+    for col in ("timestamp", "time", "Unnamed: 0"):
+        if col in out.columns:
+            source_col = col
+            break
 
-    raise ValueError("Dataset must have DatetimeIndex or parseable 'timestamp'/'time' column")
+    if source_col is None and len(out.columns) > 0:
+        first_col = out.columns[0]
+        candidate = out[first_col]
+        if not pd.api.types.is_numeric_dtype(candidate):
+            try:
+                pd.to_datetime(candidate, utc=True, errors="raise")
+                source_col = str(first_col)
+            except (ValueError, TypeError):
+                source_col = None
+
+    if source_col is None:
+        raise ValueError("Dataset must have DatetimeIndex OR 'timestamp' OR 'time' parseable as datetime")
+
+    if source_col != "timestamp":
+        out["timestamp"] = out[source_col]
+
+    out["timestamp"] = pd.to_datetime(out["timestamp"], utc=True, errors="raise")
+    out = out.set_index("timestamp").sort_index()
+    return out
 
 
 def _build_rolling_folds(index: pd.Index | np.ndarray, train_years: int = 3, test_years: int = 1, purge_bars: int = 10) -> list[tuple[np.ndarray, np.ndarray, int]]:
@@ -104,7 +118,7 @@ def _build_models(models: list[str], n_jobs: int) -> dict[str, Any]:
     if "logreg" in selected:
         built["logreg"] = LogisticRegression(
             solver="saga",
-            max_iter=5000,
+            max_iter=2000,
             random_state=42,
         )
 
@@ -239,8 +253,8 @@ def run_conditional_edge_analysis(
     prob_threshold: float = 0.55,
     corr_threshold: float = 0.85,
     unstable_feature_min_fold_frac: float = 0.6,
-    n_jobs: int | None = None,
     models: list[str] | None = None,
+    n_jobs: int | None = None,
     target_col: str = "label",
     target_mode: str = "identity",
     target_threshold: float = 0.0,
@@ -267,6 +281,7 @@ def run_conditional_edge_analysis(
         raise ValueError("No rolling 3y/1y folds available in the provided dataset")
 
     models_to_run = models if models is not None else ["xgb", "logreg"]
+    selected_models = {m.strip().lower() for m in models_to_run if m.strip()}
     def _run_fold(fold_num: int, fold: tuple[np.ndarray, np.ndarray, int]) -> tuple[list[FoldResult], list[pd.DataFrame]]:
         train_idx, test_idx, test_year = fold
         x_train, x_test = x_all.iloc[train_idx], x_all.iloc[test_idx]
@@ -283,10 +298,13 @@ def run_conditional_edge_analysis(
             prob_threshold=prob_threshold,
         )
 
-    fold_outputs = Parallel(n_jobs=n_jobs, prefer="processes")(
-        delayed(_run_fold)(fold_id, fold)
-        for fold_id, fold in enumerate(folds, start=1)
-    )
+    if "xgb" in selected_models:
+        fold_outputs = [_run_fold(fold_id, fold) for fold_id, fold in enumerate(folds, start=1)]
+    else:
+        fold_outputs = Parallel(n_jobs=n_jobs, prefer="processes")(
+            delayed(_run_fold)(fold_id, fold)
+            for fold_id, fold in enumerate(folds, start=1)
+        )
 
     fold_rows: list[FoldResult] = []
     importance_frames: list[pd.DataFrame] = []

@@ -74,6 +74,27 @@ def test_conditional_edge_target_mode_binary_gt0() -> None:
     assert not report["per_year_performance"].empty
 
 
+
+
+def test_resolve_timestamp_index_accepts_time_column() -> None:
+    df = pd.DataFrame(
+        {
+            "time": [
+                "2024-01-01T00:00:00Z",
+                "2024-01-01T01:00:00Z",
+                "2024-01-01T02:00:00Z",
+            ],
+            "feature_a": [1.0, 2.0, 3.0],
+            "label": [0, 1, 0],
+        }
+    )
+
+    resolved = conditional_edge._resolve_timestamp_index(df)
+
+    assert isinstance(resolved.index, pd.DatetimeIndex)
+    assert resolved.index.name == "timestamp"
+    assert str(resolved.index.tz) == "UTC"
+
 def test_build_rolling_folds_accepts_numpy_datetime_array() -> None:
     idx = pd.date_range("2016-01-01", "2023-12-31", freq="D").to_numpy()
     folds = conditional_edge._build_rolling_folds(idx)
