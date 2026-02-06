@@ -6,7 +6,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from sklearn.base import clone
+from joblib import Parallel, delayed
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 
@@ -79,19 +79,16 @@ def _build_rolling_folds(index: pd.Index | np.ndarray, train_years: int = 3, tes
     return folds
 
 
-def _feature_columns(dataset: pd.DataFrame) -> list[str]:
+def _feature_columns(dataset: pd.DataFrame, target_col: str) -> list[str]:
     excluded = {
+        target_col,
         "label",
         "bars_to_resolution",
         "outcome_type",
         "timestamp",
         "time",
     }
-    return [
-        c
-        for c in dataset.columns
-        if c not in excluded and pd.api.types.is_numeric_dtype(dataset[c])
-    ]
+    return [c for c in dataset.columns if c not in excluded and pd.api.types.is_numeric_dtype(dataset[c])]
 
 
 def _build_models(models: list[str], n_jobs: int) -> dict[str, Any]:
@@ -99,11 +96,15 @@ def _build_models(models: list[str], n_jobs: int) -> dict[str, Any]:
     if not selected:
         raise ValueError("At least one model must be selected")
 
+    unknown = selected.difference({"xgb", "logreg"})
+    if unknown:
+        raise ValueError(f"Unknown model(s): {', '.join(sorted(unknown))}")
+
     built: dict[str, Any] = {}
     if "logreg" in selected:
         built["logreg"] = LogisticRegression(
             solver="saga",
-            max_iter=2000,
+            max_iter=5000,
             random_state=42,
         )
 
@@ -114,23 +115,43 @@ def _build_models(models: list[str], n_jobs: int) -> dict[str, Any]:
             raise ImportError("XGBoost selected but package 'xgboost' is not installed") from exc
 
         built["xgb"] = XGBClassifier(
+            n_estimators=400,
+            learning_rate=0.03,
             max_depth=3,
-            n_estimators=300,
-            learning_rate=0.05,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            objective="binary:logistic",
-            eval_metric="logloss",
-            random_state=42,
+            subsample=0.9,
+            colsample_bytree=0.9,
             tree_method="hist",
-            nthread=n_jobs,
+            n_jobs=n_jobs,
+            random_state=42,
+            eval_metric="logloss",
         )
 
-    unknown = selected.difference({"xgb", "logreg"})
-    if unknown:
-        raise ValueError(f"Unknown model(s): {', '.join(sorted(unknown))}")
-
     return built
+
+
+def _prepare_target(data: pd.DataFrame, target_col: str, target_mode: str, target_threshold: float) -> pd.Series:
+    if target_col not in data.columns:
+        raise ValueError(f"Dataset must contain target column '{target_col}'")
+
+    src = data[target_col]
+    if target_mode == "identity":
+        y = pd.to_numeric(src, errors="coerce")
+        non_binary = set(y.dropna().unique().tolist()).difference({0, 1})
+        if non_binary:
+            raise ValueError(f"target_mode='identity' requires 0/1 values in '{target_col}'")
+        if y.isna().any():
+            raise ValueError(f"target_mode='identity' found NaN/non-numeric values in '{target_col}'")
+        return y.astype(int)
+
+    src_num = pd.to_numeric(src, errors="coerce")
+    if src_num.isna().all():
+        raise ValueError(f"target column '{target_col}' has no numeric values for mode '{target_mode}'")
+
+    if target_mode == "binary_gt0":
+        return (src_num > 0).astype(int)
+    if target_mode == "binary_threshold":
+        return (src_num > float(target_threshold)).astype(int)
+    raise ValueError(f"Unknown target_mode: {target_mode}")
 
 
 def _feature_importance_gain(model: Any, model_name: str, feature_names: pd.Index) -> pd.Series:
@@ -153,55 +174,64 @@ def _feature_importance_gain(model: Any, model_name: str, feature_names: pd.Inde
     return mapped.reindex(feature_names, fill_value=0.0).sort_values(ascending=False)
 
 
-def _evaluate_fold_model(
+def _evaluate_fold_models(
     fold_id: int,
     test_year: int,
-    model_name: str,
-    model: Any,
+    model_names: list[str],
+    model_n_jobs: int,
     x_train: pd.DataFrame,
     x_test: pd.DataFrame,
     y_train: pd.Series,
     y_test: pd.Series,
     prob_threshold: float,
-) -> tuple[FoldResult, pd.DataFrame]:
-    fitted_model = clone(model)
-    fitted_model.fit(x_train, y_train)
-    proba = fitted_model.predict_proba(x_test)[:, 1]
+) -> tuple[list[FoldResult], list[pd.DataFrame]]:
+    fold_rows: list[FoldResult] = []
+    importance_frames: list[pd.DataFrame] = []
 
-    baseline = float(y_test.mean())
-    region_mask = proba > prob_threshold
-    coverage = float(region_mask.mean())
-    region_tp = float(y_test[region_mask].mean()) if region_mask.any() else np.nan
-    lift_abs = float(region_tp - baseline) if not np.isnan(region_tp) else np.nan
-    lift_ratio = float(region_tp / baseline) if (not np.isnan(region_tp) and baseline > 0) else np.nan
+    model_map = _build_models(model_names, n_jobs=model_n_jobs)
+    for model_name, model in model_map.items():
+        fitted_model = model.__class__(**model.get_params())
+        fitted_model.fit(x_train, y_train)
+        proba = fitted_model.predict_proba(x_test)[:, 1]
 
-    try:
-        auc = float(roc_auc_score(y_test, proba))
-    except ValueError:
-        auc = np.nan
+        baseline = float(y_test.mean())
+        region_mask = proba > prob_threshold
+        coverage = float(region_mask.mean())
+        region_tp = float(y_test[region_mask].mean()) if region_mask.any() else np.nan
+        lift_abs = float(region_tp - baseline) if not np.isnan(region_tp) else np.nan
+        lift_ratio = float(region_tp / baseline) if (not np.isnan(region_tp) and baseline > 0) else np.nan
 
-    fold_result = FoldResult(
-        fold_id=fold_id,
-        test_year=test_year,
-        model=model_name,
-        n_train=len(x_train),
-        n_test=len(x_test),
-        baseline_tp_rate=baseline,
-        region_coverage=coverage,
-        region_tp_rate=region_tp,
-        lift_abs=lift_abs,
-        lift_ratio=lift_ratio,
-        auc=auc,
-    )
+        try:
+            auc = float(roc_auc_score(y_test, proba))
+        except ValueError:
+            auc = np.nan
 
-    importance = _feature_importance_gain(fitted_model, model_name, x_test.columns)
-    importance_frame = importance.reset_index()
-    importance_frame.columns = ["feature", "importance_gain"]
-    importance_frame["fold_id"] = fold_id
-    importance_frame["test_year"] = test_year
-    importance_frame["model"] = model_name
+        fold_rows.append(
+            FoldResult(
+                fold_id=fold_id,
+                test_year=test_year,
+                model=model_name,
+                n_train=len(x_train),
+                n_test=len(x_test),
+                baseline_tp_rate=baseline,
+                region_coverage=coverage,
+                region_tp_rate=region_tp,
+                lift_abs=lift_abs,
+                lift_ratio=lift_ratio,
+                auc=auc,
+            )
+        )
 
-    return fold_result, importance_frame
+        importance = _feature_importance_gain(fitted_model, model_name, x_test.columns)
+        if not importance.empty:
+            importance_frame = importance.reset_index()
+            importance_frame.columns = ["feature", "importance_gain"]
+            importance_frame["fold_id"] = fold_id
+            importance_frame["test_year"] = test_year
+            importance_frame["model"] = model_name
+            importance_frames.append(importance_frame)
+
+    return fold_rows, importance_frames
 
 
 def run_conditional_edge_analysis(
@@ -211,6 +241,9 @@ def run_conditional_edge_analysis(
     unstable_feature_min_fold_frac: float = 0.6,
     n_jobs: int | None = None,
     models: list[str] | None = None,
+    target_col: str = "label",
+    target_mode: str = "identity",
+    target_threshold: float = 0.0,
 ) -> dict[str, Any]:
     if n_jobs in (None, 0):
         import os
@@ -218,10 +251,8 @@ def run_conditional_edge_analysis(
     n_jobs = max(1, int(n_jobs))
 
     data = _resolve_timestamp_index(dataset)
-    if "label" not in data.columns:
-        raise ValueError("Dataset must contain a 'label' column")
 
-    feature_cols = _feature_columns(data)
+    feature_cols = _feature_columns(data, target_col=target_col)
     x_all = data[feature_cols].astype(np.float32)
     if x_all.empty:
         raise ValueError("Dataset has no usable numeric feature columns after preprocessing")
@@ -229,28 +260,39 @@ def run_conditional_edge_analysis(
     if x_all.isna().any().any():
         x_all = x_all.fillna(x_all.median(numeric_only=True))
 
-    y_all = data["label"].astype(int)
+    y_all = _prepare_target(data, target_col=target_col, target_mode=target_mode, target_threshold=target_threshold)
 
     folds = _build_rolling_folds(data.index, train_years=3, test_years=1, purge_bars=10)
     if not folds:
         raise ValueError("No rolling 3y/1y folds available in the provided dataset")
 
     models_to_run = models if models is not None else ["xgb", "logreg"]
-    model_map = _build_models(models_to_run, n_jobs=n_jobs)
+    def _run_fold(fold_num: int, fold: tuple[np.ndarray, np.ndarray, int]) -> tuple[list[FoldResult], list[pd.DataFrame]]:
+        train_idx, test_idx, test_year = fold
+        x_train, x_test = x_all.iloc[train_idx], x_all.iloc[test_idx]
+        y_train, y_test = y_all.iloc[train_idx], y_all.iloc[test_idx]
+        return _evaluate_fold_models(
+            fold_id=fold_num,
+            test_year=test_year,
+            model_names=models_to_run,
+            model_n_jobs=n_jobs,
+            x_train=x_train,
+            x_test=x_test,
+            y_train=y_train,
+            y_test=y_test,
+            prob_threshold=prob_threshold,
+        )
+
+    fold_outputs = Parallel(n_jobs=n_jobs, prefer="processes")(
+        delayed(_run_fold)(fold_id, fold)
+        for fold_id, fold in enumerate(folds, start=1)
+    )
 
     fold_rows: list[FoldResult] = []
     importance_frames: list[pd.DataFrame] = []
-
-    for fold_id, (train_idx, test_idx, test_year) in enumerate(folds, start=1):
-        x_train, x_test = x_all.iloc[train_idx], x_all.iloc[test_idx]
-        y_train, y_test = y_all.iloc[train_idx], y_all.iloc[test_idx]
-        for model_name, model in model_map.items():
-            fold_result, importance_frame = _evaluate_fold_model(
-                fold_id, test_year, model_name, model, x_train, x_test, y_train, y_test, prob_threshold
-            )
-            fold_rows.append(fold_result)
-            if not importance_frame.empty:
-                importance_frames.append(importance_frame)
+    for rows, frames in fold_outputs:
+        fold_rows.extend(rows)
+        importance_frames.extend(frames)
 
     performance = pd.DataFrame([r.__dict__ for r in fold_rows]).sort_values(["fold_id", "model"])
 
@@ -303,7 +345,7 @@ def run_conditional_edge_analysis(
         if mask.mean() < 0.03:
             continue
 
-        per_year = data.loc[mask, "label"].groupby(data.loc[mask].index.year).mean()
+        per_year = y_all.loc[mask].groupby(data.loc[mask].index.year).mean()
         if len(per_year) < 2:
             continue
         if bool((per_year > prob_threshold).all()):

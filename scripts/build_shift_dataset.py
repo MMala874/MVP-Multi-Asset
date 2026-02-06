@@ -31,13 +31,14 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv", required=True)
     ap.add_argument("--out_dir", default="outputs")
+    ap.add_argument("--add_label", action="store_true", help="Add double-barrier label column")
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     ohlcv = load_ohlcv_csv(args.csv)
-    dataset = build_shift_dataset(ohlcv)
+    dataset = build_shift_dataset(ohlcv, add_label=args.add_label)
 
     csv_path = out_dir / "shift_dataset.csv"
     dataset.to_csv(csv_path, index=True)
