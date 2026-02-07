@@ -1,0 +1,6 @@
+defaults:
+  frequency: 1m
+  roll_rule: volume
+  data_dir: futures_mvp/data
+quality:
+  missing_threshold: 0.001
