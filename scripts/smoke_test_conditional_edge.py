@@ -8,9 +8,9 @@ from edge_discovery.conditional_edge import run_conditional_edge_analysis
 from edge_discovery.dataset_builder import build_research_dataset
 
 
-def _make_synthetic_ohlc(rows: int = 4000) -> pd.DataFrame:
+def _make_synthetic_ohlc(rows: int = 14000) -> pd.DataFrame:
     rng = np.random.default_rng(42)
-    idx = pd.date_range("2017-01-01", periods=rows, freq="12h", tz="UTC")
+    idx = pd.date_range("2009-01-01", periods=rows, freq="12h", tz="UTC")
     noise = rng.normal(0, 0.0008, size=rows)
     close = 1.10 + np.cumsum(noise)
     open_ = np.r_[close[0], close[:-1]]
@@ -43,8 +43,8 @@ def main() -> None:
 
     smoke_payload = {
         "decision": report["decision"],
-        "fold_rows": int(len(report["fold_performance"])),
-        "models": sorted(report["fold_performance"]["model"].unique().tolist()),
+        "reason": report["reason"],
+        "metrics": report["metrics"],
     }
 
     out_path = out_dir / "smoke_report.json"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import combinations
+from math import erf, sqrt
 from typing import Any
 
 import numpy as np
@@ -264,6 +265,99 @@ def _evaluate_fold_models(
     return fold_rows, importance_frames
 
 
+def _two_proportion_one_sided_pvalue(success_a: int, n_a: int, success_b: int, n_b: int) -> float:
+    if n_a <= 0 or n_b <= 0:
+        return float("nan")
+    p_a = success_a / n_a
+    p_b = success_b / n_b
+    pooled = (success_a + success_b) / (n_a + n_b)
+    variance = pooled * (1.0 - pooled) * ((1.0 / n_a) + (1.0 / n_b))
+    if variance <= 0.0:
+        return float("nan")
+    z_score = (p_a - p_b) / sqrt(variance)
+    cdf = 0.5 * (1.0 + erf(z_score / sqrt(2.0)))
+    return float(max(0.0, min(1.0, 1.0 - cdf)))
+
+
+def _apply_rare_event_filter(
+    full_data: pd.DataFrame,
+    event_cols: list[str],
+    calibration_mask: pd.Series,
+) -> pd.DataFrame:
+    if not event_cols:
+        return full_data
+
+    out = full_data.copy()
+    cal = out.loc[calibration_mask, event_cols]
+
+    for col in event_cols:
+        source = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
+        cal_col = pd.to_numeric(cal[col], errors="coerce").dropna()
+        if cal_col.empty:
+            out[col] = 0.0
+            continue
+
+        lower = float(cal_col.quantile(0.05))
+        upper = float(cal_col.quantile(0.95))
+        rare_mask = (source < lower) | (source > upper)
+        out[col] = rare_mask.astype(np.float32)
+
+    return out
+
+
+def _compute_split_metrics(y_true: pd.Series, proba: np.ndarray, prob_threshold: float) -> dict[str, float | int]:
+    baseline = float(y_true.mean())
+    region_mask = np.asarray(proba > prob_threshold, dtype=bool)
+    coverage = float(region_mask.mean())
+
+    if region_mask.any():
+        region_tp = float(y_true.iloc[region_mask].mean())
+        lift = float(region_tp - baseline)
+    else:
+        region_tp = float("nan")
+        lift = float("nan")
+
+    try:
+        auc = float(roc_auc_score(y_true, proba))
+    except ValueError:
+        auc = float("nan")
+
+    in_region = int(region_mask.sum())
+    out_region = int((~region_mask).sum())
+    return {
+        "auc": auc,
+        "lift": lift,
+        "coverage": coverage,
+        "region_tp": region_tp,
+        "baseline_tp": baseline,
+        "in_region": in_region,
+        "out_region": out_region,
+        "in_region_success": int(y_true.iloc[region_mask].sum()) if in_region > 0 else 0,
+        "out_region_success": int(y_true.iloc[~region_mask].sum()) if out_region > 0 else 0,
+    }
+
+
+def _benjamini_hochberg(p_values: dict[str, float], alpha: float = 0.05) -> tuple[dict[str, float], list[str]]:
+    finite = [(k, v) for k, v in p_values.items() if np.isfinite(v)]
+    if not finite:
+        return {k: float("nan") for k in p_values}, []
+
+    m = len(finite)
+    sorted_vals = sorted(finite, key=lambda item: item[1])
+    adjusted_sorted: list[tuple[str, float]] = []
+    running_min = 1.0
+    for rank in range(m, 0, -1):
+        key, p_val = sorted_vals[rank - 1]
+        adj = min(1.0, p_val * m / rank)
+        running_min = min(running_min, adj)
+        adjusted_sorted.append((key, running_min))
+    adjusted_sorted.reverse()
+    adjusted = {k: float("nan") for k in p_values}
+    adjusted.update({k: v for k, v in adjusted_sorted})
+    significant = [k for k, v in adjusted.items() if np.isfinite(v) and v <= alpha]
+    return adjusted, sorted(significant)
+
+
 def run_conditional_edge_analysis(
     dataset: pd.DataFrame,
     prob_threshold: float = 0.55,
@@ -298,158 +392,132 @@ def run_conditional_edge_analysis(
 
     y_all = _prepare_target(data, target_col=target_col, target_mode=target_mode, target_threshold=target_threshold)
 
-    folds = _build_rolling_folds(data.index, train_years=3, test_years=1, purge_bars=10)
-    if not folds:
-        raise ValueError("No rolling 3y/1y folds available in the provided dataset")
+    years = data.index.year
+    train_mask = (years >= 2009) & (years <= 2018)
+    val_mask = (years >= 2019) & (years <= 2021)
+    holdout_mask = (years >= 2022) & (years <= 2025)
+
+    if train_mask.sum() == 0 or val_mask.sum() == 0 or holdout_mask.sum() == 0:
+        raise ValueError("Dataset must contain bars for TRAIN_DEV(2009-2018), VALIDATION(2019-2021) and HOLDOUT(2022-2025)")
+
+    calibration_mask = train_mask | val_mask
+    event_cols = [c for c in feature_cols if c.startswith("event_")]
+    filtered_x = _apply_rare_event_filter(x_all, event_cols=event_cols, calibration_mask=calibration_mask)
 
     models_to_run = models if models is not None else ["xgb", "logreg"]
-    fold_workers = min(n_jobs, len(folds))
-    model_n_jobs = max(1, n_jobs // fold_workers)
+    model_name = models_to_run[0]
+    fitted_model = _build_models([model_name], n_jobs=n_jobs)[model_name]
 
-    def _run_fold(fold_num: int, fold: tuple[np.ndarray, np.ndarray, int]) -> tuple[list[FoldResult], list[pd.DataFrame]]:
-        train_idx, test_idx, test_year = fold
-        x_train, x_test = x_all.iloc[train_idx], x_all.iloc[test_idx]
-        y_train, y_test = y_all.iloc[train_idx], y_all.iloc[test_idx]
-        return _evaluate_fold_models(
-            fold_id=fold_num,
-            test_year=test_year,
-            model_names=models_to_run,
-            model_n_jobs=model_n_jobs,
-            x_train=x_train,
-            x_test=x_test,
-            y_train=y_train,
-            y_test=y_test,
-            prob_threshold=prob_threshold,
-        )
+    x_train = filtered_x.loc[train_mask]
+    y_train = y_all.loc[train_mask]
+    x_val = filtered_x.loc[val_mask]
+    y_val = y_all.loc[val_mask]
+    x_holdout = filtered_x.loc[holdout_mask]
+    y_holdout = y_all.loc[holdout_mask]
 
-    fold_outputs = Parallel(n_jobs=fold_workers, prefer="threads")(
-        delayed(_run_fold)(fold_id, fold)
-        for fold_id, fold in enumerate(folds, start=1)
+    fitted_model.fit(x_train, y_train)
+
+    train_proba = fitted_model.predict_proba(x_train)[:, 1]
+    val_proba = fitted_model.predict_proba(x_val)[:, 1]
+    holdout_proba = fitted_model.predict_proba(x_holdout)[:, 1]
+
+    train_metrics = _compute_split_metrics(y_train, train_proba, prob_threshold=prob_threshold)
+    validation_metrics = _compute_split_metrics(y_val, val_proba, prob_threshold=prob_threshold)
+    holdout_metrics = _compute_split_metrics(y_holdout, holdout_proba, prob_threshold=prob_threshold)
+
+    raw_p_values = {
+        "train_lift": _two_proportion_one_sided_pvalue(
+            success_a=train_metrics["in_region_success"],
+            n_a=train_metrics["in_region"],
+            success_b=train_metrics["out_region_success"],
+            n_b=train_metrics["out_region"],
+        ),
+        "validation_lift": _two_proportion_one_sided_pvalue(
+            success_a=validation_metrics["in_region_success"],
+            n_a=validation_metrics["in_region"],
+            success_b=validation_metrics["out_region_success"],
+            n_b=validation_metrics["out_region"],
+        ),
+        "holdout_lift": _two_proportion_one_sided_pvalue(
+            success_a=holdout_metrics["in_region_success"],
+            n_a=holdout_metrics["in_region"],
+            success_b=holdout_metrics["out_region_success"],
+            n_b=holdout_metrics["out_region"],
+        ),
+    }
+    adjusted_p_values, significant_after_fdr = _benjamini_hochberg(raw_p_values, alpha=0.05)
+
+    holdout_df = pd.DataFrame(
+        {
+            "year": y_holdout.index.year,
+            "y": y_holdout.to_numpy(),
+            "proba": holdout_proba,
+        }
     )
-    fold_outputs = sorted(fold_outputs, key=lambda item: item[0][0].fold_id if item[0] else -1)
+    holdout_df["region"] = holdout_df["proba"] > prob_threshold
 
-    fold_rows: list[FoldResult] = []
-    importance_frames: list[pd.DataFrame] = []
-    for rows, frames in fold_outputs:
-        fold_rows.extend(rows)
-        importance_frames.extend(frames)
-
-    performance = pd.DataFrame([r.__dict__ for r in fold_rows]).sort_values(["fold_id", "model"])
-
-    if importance_frames:
-        importance_all = pd.concat(importance_frames, ignore_index=True)
-    else:
-        importance_all = pd.DataFrame(columns=["feature", "importance_gain", "fold_id", "test_year", "model"])
-
-    xgb_importance = importance_all.loc[importance_all["model"] == "xgb"].copy()
-    xgb_top10 = (
-        xgb_importance.sort_values(["fold_id", "importance_gain"], ascending=[True, False])
-        .groupby("fold_id", as_index=False)
-        .head(10)
-    ) if not xgb_importance.empty else pd.DataFrame(columns=xgb_importance.columns.tolist())
-
-    fold_count = performance["fold_id"].nunique()
-    xgb_stability = (
-        xgb_top10.assign(in_top10=1)
-        .groupby("feature", as_index=False)["in_top10"]
-        .sum()
-        .rename(columns={"in_top10": "top10_hits"})
-    ) if not xgb_top10.empty else pd.DataFrame(columns=["feature", "top10_hits"])
-    if not xgb_stability.empty:
-        xgb_stability["stability_score"] = xgb_stability["top10_hits"] / float(fold_count)
-
-    stable_features = xgb_stability.loc[
-        xgb_stability["stability_score"] >= unstable_feature_min_fold_frac,
-        "feature",
-    ].tolist() if not xgb_stability.empty else []
-
-    corr = x_all[stable_features].corr().abs() if stable_features else pd.DataFrame()
-    dropped_corr: list[str] = []
-    if not corr.empty and not xgb_importance.empty:
-        importance_rank = xgb_importance.groupby("feature", as_index=False)["importance_gain"].mean().set_index("feature")
-        for i, col_a in enumerate(corr.columns):
-            for col_b in corr.columns[i + 1 :]:
-                if corr.loc[col_a, col_b] > corr_threshold:
-                    imp_a = float(importance_rank.loc[col_a, "importance_gain"])
-                    imp_b = float(importance_rank.loc[col_b, "importance_gain"])
-                    dropped_corr.append(col_a if imp_a < imp_b else col_b)
-
-    dropped_corr = sorted(set(dropped_corr))
-    final_features = [f for f in stable_features if f not in dropped_corr]
-
-    interaction_rows: list[dict[str, Any]] = []
-    for f1, f2 in combinations(final_features[:15], 2):
-        q1 = x_all[f1].quantile(0.7)
-        q2 = x_all[f2].quantile(0.7)
-        mask = (x_all[f1] >= q1) & (x_all[f2] >= q2)
-        if mask.mean() < 0.03:
+    per_year_lift: dict[str, float] = {}
+    strong_negative_years: list[str] = []
+    for year in [2022, 2023, 2024, 2025]:
+        year_data = holdout_df.loc[holdout_df["year"] == year]
+        if year_data.empty:
+            per_year_lift[str(year)] = float("nan")
             continue
-
-        per_year = y_all.loc[mask].groupby(data.loc[mask].index.year).mean()
-        if len(per_year) < 2:
+        baseline = float(year_data["y"].mean())
+        region = year_data.loc[year_data["region"], "y"]
+        if region.empty:
+            per_year_lift[str(year)] = float("nan")
             continue
-        if bool((per_year > prob_threshold).all()):
-            interaction_rows.append(
-                {
-                    "feature_1": f1,
-                    "feature_2": f2,
-                    "support": float(mask.mean()),
-                    "tp_rate_mean": float(per_year.mean()),
-                    "tp_rate_min_year": float(per_year.min()),
-                }
-            )
+        year_lift = float(region.mean() - baseline)
+        per_year_lift[str(year)] = year_lift
+        if year_lift < -0.05:
+            strong_negative_years.append(str(year))
 
-    interactions = pd.DataFrame(interaction_rows).sort_values(
-        ["tp_rate_min_year", "tp_rate_mean"], ascending=False
-    ) if interaction_rows else pd.DataFrame(columns=["feature_1", "feature_2", "support", "tp_rate_mean", "tp_rate_min_year"])
+    sign_values = [np.sign(v) for v in per_year_lift.values() if np.isfinite(v) and v != 0.0]
+    sign_flip_instability = bool(sign_values and (min(sign_values) < 0 < max(sign_values)))
 
-    event_cols = [c for c in feature_cols if c.startswith("event_")]
-    event_rows: list[dict[str, Any]] = []
-    for e in event_cols:
-        event_mask = x_all[e] > 0
-        if event_mask.sum() < 30:
-            continue
-        per_year = y_all[event_mask].groupby(data.index.year[event_mask]).mean()
-        if len(per_year) < 2:
-            continue
-        event_rows.append(
-            {
-                "event": e,
-                "support": int(event_mask.sum()),
-                "tp_rate_mean": float(per_year.mean()),
-                "tp_rate_min_year": float(per_year.min()),
-                "persistent_skew": bool((per_year > 0.5).all() or (per_year < 0.5).all()),
-            }
-        )
+    metrics = {
+        "train_auc": train_metrics["auc"],
+        "validation_auc": validation_metrics["auc"],
+        "holdout_auc": holdout_metrics["auc"],
+        "train_lift": train_metrics["lift"],
+        "validation_lift": validation_metrics["lift"],
+        "holdout_lift": holdout_metrics["lift"],
+        "coverage": holdout_metrics["coverage"],
+        "raw_p_values": raw_p_values,
+        "adjusted_p_values": adjusted_p_values,
+        "significant_after_fdr": significant_after_fdr,
+        "per_year_lift": per_year_lift,
+    }
 
-    event_skew = pd.DataFrame(event_rows).sort_values("tp_rate_mean", ascending=False) if event_rows else pd.DataFrame(
-        columns=["event", "support", "tp_rate_mean", "tp_rate_min_year", "persistent_skew"]
+    accept = (
+        np.isfinite(metrics["holdout_auc"])
+        and metrics["holdout_auc"] > 0.55
+        and np.isfinite(metrics["holdout_lift"])
+        and metrics["holdout_lift"] > 0.05
+        and np.isfinite(metrics["coverage"])
+        and metrics["coverage"] > 0.03
+        and len(significant_after_fdr) > 0
+        and not strong_negative_years
+        and not sign_flip_instability
     )
 
-    perf_year = (
-        performance.groupby(["test_year", "model"], as_index=False)[
-            ["baseline_tp_rate", "region_tp_rate", "lift_abs", "lift_ratio", "auc", "region_coverage"]
-        ].mean()
-    )
-
-    median_lift = performance["lift_abs"].median(skipna=True)
-    stable_count = len(final_features)
-    decision = "ACCEPT EDGE" if (median_lift >= 0.03 and stable_count >= 5 and not interactions.empty) else "REJECT EDGE"
+    reason_parts: list[str] = []
+    if not (np.isfinite(metrics["holdout_auc"]) and metrics["holdout_auc"] > 0.55):
+        reason_parts.append("holdout_auc<=0.55")
+    if not (np.isfinite(metrics["holdout_lift"]) and metrics["holdout_lift"] > 0.05):
+        reason_parts.append("holdout_lift<=0.05")
+    if not (np.isfinite(metrics["coverage"]) and metrics["coverage"] > 0.03):
+        reason_parts.append("coverage<=3%")
+    if len(significant_after_fdr) == 0:
+        reason_parts.append("no_metric_significant_after_fdr")
+    if strong_negative_years:
+        reason_parts.append(f"strong_negative_years={','.join(strong_negative_years)}")
+    if sign_flip_instability:
+        reason_parts.append("holdout_lift_sign_flip")
 
     return {
-        "decision": decision,
-        "stability_report": {
-            "folds": fold_count,
-            "stable_features_before_corr_drop": len(stable_features),
-            "dropped_for_high_correlation": dropped_corr,
-            "final_stable_features": final_features,
-        },
-        "feature_importance_stability": xgb_stability.sort_values(["stability_score", "top10_hits"], ascending=[False, False])
-        if not xgb_stability.empty else xgb_stability,
-        "per_year_performance": perf_year.sort_values(["test_year", "model"]),
-        "top_stable_feature_interactions": interactions.head(15),
-        "regions_consistent_ptp_gt_055": interactions.loc[interactions["tp_rate_min_year"] > 0.55].head(15),
-        "event_types_persistent_skew": event_skew.loc[event_skew["persistent_skew"]],
-        "fold_performance": performance,
-        "xgb_top_features_by_fold": xgb_top10.sort_values(["fold_id", "importance_gain"], ascending=[True, False]),
+        "decision": "ACCEPT_EDGE" if accept else "REJECT_EDGE",
+        "reason": "all_strict_conditions_passed" if accept else "; ".join(reason_parts),
+        "metrics": metrics,
     }
