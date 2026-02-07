@@ -5,6 +5,19 @@ import argparse
 from edge_discovery.event_dataset import build_event_dataset, load_ohlc_csv, save_dataset
 
 
+FORBIDDEN_TOKENS = ("fwd", "mfe", "mae", "resolution", "outcome", "future", "next", "tp", "sl")
+FORBIDDEN_EXACT = {"bars_to_resolution", "outcome_type"}
+
+
+def _drop_diagnostic_columns(df):
+    forbidden = [
+        c
+        for c in df.columns
+        if c in FORBIDDEN_EXACT or any(tok in c.lower() for tok in FORBIDDEN_TOKENS)
+    ]
+    return df.drop(columns=forbidden, errors="ignore")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv", required=True)
@@ -29,6 +42,7 @@ def main() -> None:
         min_event_coverage=args.min_event_coverage,
         max_event_coverage=args.max_event_coverage,
     )
+    ds = _drop_diagnostic_columns(ds)
     save_dataset(ds, args.out)
 
     counts = ds.assign(year=ds.index.year).groupby("year").size().to_dict()

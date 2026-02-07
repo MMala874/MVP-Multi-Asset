@@ -14,7 +14,8 @@ def apply_double_barrier_labels(
     tp_atr: float = 1.2,
     sl_atr: float = 1.0,
     horizon: int = 10,
-) -> pd.DataFrame:
+    include_diagnostics: bool = True,
+) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
     atr14 = atr(df, 14).to_numpy(dtype=float)
     close = df["close"].to_numpy(dtype=float)
     high = df["high"].to_numpy(dtype=float)
@@ -68,9 +69,15 @@ def apply_double_barrier_labels(
                 outcome[i] = "SL"
                 break
 
-    return pd.DataFrame(
+    labels_df = pd.DataFrame(
         {
             "label": label,
+        },
+        index=df.index,
+    )
+
+    diagnostics_df = pd.DataFrame(
+        {
             "bars_to_resolution": pd.Series(bars_to, index=df.index, dtype="Int64"),
             "outcome_type": outcome,
             "fwd_ret_10": fwd_ret_10,
@@ -79,6 +86,10 @@ def apply_double_barrier_labels(
         },
         index=df.index,
     )
+
+    if include_diagnostics:
+        return labels_df, diagnostics_df
+    return labels_df
 
 
 label_event_bars = apply_double_barrier_labels
