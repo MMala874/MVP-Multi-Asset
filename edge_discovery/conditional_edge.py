@@ -12,6 +12,14 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 
 
+LEAKAGE_EXACT_COLUMNS = {"bars_to_resolution", "outcome_type"}
+
+
+def _is_blacklisted_feature(col: str) -> bool:
+    col_l = col.lower()
+    return col.startswith("fwd_") or ("mfe" in col_l) or ("mae" in col_l) or (col in LEAKAGE_EXACT_COLUMNS)
+
+
 @dataclass
 class FoldData:
     train_idx: np.ndarray
@@ -159,7 +167,11 @@ def run_conditional_edge_analysis(
     del holdout_years
     df = _parse_dataset(dataset)
 
-    numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and c != "label"]
+    numeric_cols = [
+        c
+        for c in df.columns
+        if pd.api.types.is_numeric_dtype(df[c]) and c != "label" and not _is_blacklisted_feature(c)
+    ]
     X_all = df[numeric_cols].astype(float)
     y_all = pd.to_numeric(df["label"], errors="coerce")
     valid = y_all.isin([0, 1])
@@ -275,4 +287,5 @@ def run_conditional_edge_analysis(
                 {"feature": k, "fold_freq": v / len(best_folds)} for k, v in sorted(counts.items(), key=lambda x: -x[1])
             ],
         },
+        "feature_cols": list(X_all.columns),
     }

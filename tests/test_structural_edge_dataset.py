@@ -56,3 +56,23 @@ def test_structural_edge_dataset_no_future_leakage() -> None:
 
     pd.testing.assert_frame_equal(left, right, check_dtype=False, check_exact=False, rtol=1e-10, atol=1e-12)
     assert not common_index.empty
+
+
+
+def test_structural_edge_dataset_splits_label_diagnostics(tmp_path) -> None:
+    df = _make_m15_ohlcv(n=2000, seed=17)
+    dataset = build_research_dataset(df, out_dir=tmp_path)
+
+    leak_cols = {"bars_to_resolution", "outcome_type", "fwd_ret_10", "mfe_10_atr", "mae_10_atr"}
+    assert leak_cols.isdisjoint(set(dataset.columns))
+
+    research_path = tmp_path / "research_dataset_v2.csv"
+    diagnostics_path = tmp_path / "labels_diagnostics_v2.csv"
+    assert research_path.exists()
+    assert diagnostics_path.exists()
+
+    research_df = pd.read_csv(research_path)
+    diagnostics_df = pd.read_csv(diagnostics_path)
+
+    assert leak_cols.isdisjoint(set(research_df.columns))
+    assert {"timestamp", "label", *leak_cols}.issubset(set(diagnostics_df.columns))

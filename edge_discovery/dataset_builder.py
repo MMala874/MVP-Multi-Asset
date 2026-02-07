@@ -6,6 +6,7 @@ import pandas as pd
 
 from edge_discovery.event_engine import compute_event_flags
 from edge_discovery.feature_engine import compute_features
+from edge_discovery.conditional_edge import _is_blacklisted_feature
 from edge_discovery.labeler import apply_double_barrier_labels
 
 
@@ -17,6 +18,14 @@ def _attach_prev_day_levels(df: pd.DataFrame) -> pd.DataFrame:
     out["prev_day_high"] = pd.Series(day_high.reindex(day).to_numpy(), index=out.index)
     out["prev_day_low"] = pd.Series(day_low.reindex(day).to_numpy(), index=out.index)
     return out
+
+
+def _split_leakage_columns(dataset: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    leak_cols = [c for c in dataset.columns if _is_blacklisted_feature(c)]
+    diagnostics_cols = ["timestamp", "label", *leak_cols]
+    diagnostics = dataset[[c for c in diagnostics_cols if c in dataset.columns]].copy()
+    research = dataset.drop(columns=leak_cols, errors="ignore").copy()
+    return research, diagnostics
 
 
 def build_research_dataset(df: pd.DataFrame, config: dict | None = None, out_dir: str | Path | None = None) -> pd.DataFrame:
@@ -45,23 +54,27 @@ def build_research_dataset(df: pd.DataFrame, config: dict | None = None, out_dir
     ds = ds.dropna(subset=features.columns)
 
     ds.insert(0, "timestamp", ds.index.tz_convert("UTC").strftime("%Y-%m-%dT%H:%M:%SZ"))
+    research_ds, diagnostics_ds = _split_leakage_columns(ds)
 
     if out_dir is not None:
         out = Path(out_dir)
         out.mkdir(parents=True, exist_ok=True)
         csv_path = out / "research_dataset_v2.csv"
         parquet_path = out / "research_dataset_v2.parquet"
-        ds.to_csv(csv_path, index=False)
-        ds.to_parquet(parquet_path, index=False)
+        diagnostics_path = out / "labels_diagnostics_v2.csv"
+        research_ds.to_csv(csv_path, index=False)
+        research_ds.to_parquet(parquet_path, index=False)
+        diagnostics_ds.to_csv(diagnostics_path, index=False)
 
-        year_counts = ds.index.year.value_counts().sort_index().to_dict()
-        print(f"rows={len(ds)}")
-        print(f"label_balance={ds['label'].mean():.6f}")
+        year_counts = research_ds.index.year.value_counts().sort_index().to_dict()
+        print(f"rows={len(research_ds)}")
+        print(f"label_balance={research_ds['label'].mean():.6f}")
         print(f"year_counts={year_counts}")
         print(f"Saved dataset CSV: {csv_path}")
         print(f"Saved dataset Parquet: {parquet_path}")
+        print(f"Saved label diagnostics CSV: {diagnostics_path}")
 
-    return ds
+    return research_ds
 
 
 def build_shift_dataset(df: pd.DataFrame, horizons: list[int] | tuple[int, ...] = (5, 10, 20), add_label: bool = True) -> pd.DataFrame:
