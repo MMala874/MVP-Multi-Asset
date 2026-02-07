@@ -11,7 +11,7 @@ from edge_discovery.labeler import label_event_bars
 def build_shift_dataset(
     df: pd.DataFrame,
     horizons: list[int] | tuple[int, ...] = (5, 10, 20),
-    add_label: bool = False,
+    add_label: bool = True,
 ) -> pd.DataFrame:
     events = compute_event_flags(df)
     feats = compute_features(df)

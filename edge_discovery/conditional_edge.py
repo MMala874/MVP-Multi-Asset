@@ -34,28 +34,36 @@ def _resolve_timestamp_index(dataset: pd.DataFrame) -> pd.DataFrame:
 
     out = dataset.copy()
     source_col: str | None = None
-    for col in ("timestamp", "time", "Unnamed: 0"):
+    timestamp_candidates = ["timestamp", "time", "datetime", "Date", "Time", "Unnamed: 0"]
+
+    for col in timestamp_candidates:
         if col in out.columns:
             source_col = col
             break
 
     if source_col is None and len(out.columns) > 0:
         first_col = out.columns[0]
-        candidate = out[first_col]
-        if not pd.api.types.is_numeric_dtype(candidate):
-            try:
-                pd.to_datetime(candidate, utc=True, errors="raise")
-                source_col = str(first_col)
-            except (ValueError, TypeError):
-                source_col = None
+        first_values = out[first_col]
+        parsed_first = pd.to_datetime(first_values, utc=True, errors="coerce")
+        if not parsed_first.isna().all():
+            source_col = str(first_col)
 
     if source_col is None:
-        raise ValueError("Dataset must have DatetimeIndex OR 'timestamp' OR 'time' parseable as datetime")
+        raise ValueError(
+            "Dataset must have DatetimeIndex OR a parseable timestamp-like column "
+            f"(checked: {timestamp_candidates}); available columns={list(out.columns)}"
+        )
 
-    if source_col != "timestamp":
-        out["timestamp"] = out[source_col]
+    parsed = pd.to_datetime(out[source_col], utc=True, errors="coerce")
+    if parsed.isna().all():
+        sample_values = out[source_col].head(3).tolist()
+        raise ValueError(
+            "Timestamp parsing failed: selected column "
+            f"'{source_col}' produced all NaT. Available columns={list(out.columns)}; "
+            f"first_3_values={sample_values}"
+        )
 
-    out["timestamp"] = pd.to_datetime(out["timestamp"], utc=True, errors="raise")
+    out["timestamp"] = parsed
     out = out.set_index("timestamp").sort_index()
     return out
 
@@ -94,15 +102,21 @@ def _build_rolling_folds(index: pd.Index | np.ndarray, train_years: int = 3, tes
 
 
 def _feature_columns(dataset: pd.DataFrame, target_col: str) -> list[str]:
+    timestamp_cols = {"timestamp", "time", "datetime", "date", "Date", "Time", "Unnamed: 0"}
     excluded = {
         target_col,
         "label",
         "bars_to_resolution",
         "outcome_type",
-        "timestamp",
-        "time",
     }
-    return [c for c in dataset.columns if c not in excluded and pd.api.types.is_numeric_dtype(dataset[c])]
+    return [
+        c
+        for c in dataset.columns
+        if c not in excluded
+        and c not in timestamp_cols
+        and not str(c).startswith("fwd_")
+        and pd.api.types.is_numeric_dtype(dataset[c])
+    ]
 
 
 def _build_models(models: list[str], n_jobs: int) -> dict[str, Any]:
@@ -129,11 +143,13 @@ def _build_models(models: list[str], n_jobs: int) -> dict[str, Any]:
             raise ImportError("XGBoost selected but package 'xgboost' is not installed") from exc
 
         built["xgb"] = XGBClassifier(
-            n_estimators=400,
-            learning_rate=0.03,
+            n_estimators=600,
+            learning_rate=0.04,
             max_depth=3,
-            subsample=0.9,
-            colsample_bytree=0.9,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            reg_lambda=1.0,
+            min_child_weight=1,
             tree_method="hist",
             n_jobs=n_jobs,
             random_state=42,
@@ -266,6 +282,12 @@ def run_conditional_edge_analysis(
 
     data = _resolve_timestamp_index(dataset)
 
+    if target_col not in data.columns:
+        raise ValueError(
+            f"Dataset must include a '{target_col}' column (double-barrier label). "
+            f"Available columns={list(data.columns)}"
+        )
+
     feature_cols = _feature_columns(data, target_col=target_col)
     x_all = data[feature_cols].astype(np.float32)
     if x_all.empty:
@@ -281,7 +303,9 @@ def run_conditional_edge_analysis(
         raise ValueError("No rolling 3y/1y folds available in the provided dataset")
 
     models_to_run = models if models is not None else ["xgb", "logreg"]
-    selected_models = {m.strip().lower() for m in models_to_run if m.strip()}
+    fold_workers = min(n_jobs, len(folds))
+    model_n_jobs = max(1, n_jobs // fold_workers)
+
     def _run_fold(fold_num: int, fold: tuple[np.ndarray, np.ndarray, int]) -> tuple[list[FoldResult], list[pd.DataFrame]]:
         train_idx, test_idx, test_year = fold
         x_train, x_test = x_all.iloc[train_idx], x_all.iloc[test_idx]
@@ -290,7 +314,7 @@ def run_conditional_edge_analysis(
             fold_id=fold_num,
             test_year=test_year,
             model_names=models_to_run,
-            model_n_jobs=n_jobs,
+            model_n_jobs=model_n_jobs,
             x_train=x_train,
             x_test=x_test,
             y_train=y_train,
@@ -298,13 +322,11 @@ def run_conditional_edge_analysis(
             prob_threshold=prob_threshold,
         )
 
-    if "xgb" in selected_models:
-        fold_outputs = [_run_fold(fold_id, fold) for fold_id, fold in enumerate(folds, start=1)]
-    else:
-        fold_outputs = Parallel(n_jobs=n_jobs, prefer="processes")(
-            delayed(_run_fold)(fold_id, fold)
-            for fold_id, fold in enumerate(folds, start=1)
-        )
+    fold_outputs = Parallel(n_jobs=fold_workers, prefer="threads")(
+        delayed(_run_fold)(fold_id, fold)
+        for fold_id, fold in enumerate(folds, start=1)
+    )
+    fold_outputs = sorted(fold_outputs, key=lambda item: item[0][0].fold_id if item[0] else -1)
 
     fold_rows: list[FoldResult] = []
     importance_frames: list[pd.DataFrame] = []

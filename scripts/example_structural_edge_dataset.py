@@ -15,21 +15,25 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     ohlc = load_ohlc_csv(args.csv)
-    ds = build_research_dataset(ohlc)
+    ds = build_research_dataset(ohlc, add_label=True)
+    if "label" not in ds.columns:
+        raise ValueError("build_research_dataset must produce a 'label' column for conditional edge ML")
 
-    print(ds.head(5).to_string())
-    print(f"Rows: {len(ds)} | Columns: {len(ds.columns)}")
+    export_df = ds.reset_index(names="timestamp")
+    export_df["timestamp"] = export_df["timestamp"].dt.tz_convert("UTC")
 
-    # IMPORTANT: avoid writing index into CSV, otherwise a string 'time' column appears
-    # and breaks downstream float conversion.
-    ds.to_csv(out_dir / "research_dataset.csv", index=False)
+    print(export_df.head(5).to_string())
+    print(f"Rows: {len(export_df)} | Columns: {len(export_df.columns)}")
+
+    export_df.to_csv(out_dir / "research_dataset.csv", index=False)
     print(f"Saved: {out_dir / 'research_dataset.csv'}")
 
     try:
-        ds.to_parquet(out_dir / "research_dataset.parquet")
+        export_df.to_parquet(out_dir / "research_dataset.parquet", index=False)
         print(f"Saved: {out_dir / 'research_dataset.parquet'}")
     except Exception as e:
         print(f"[WARN] Parquet not saved (install pyarrow): {e}")
+
 
 if __name__ == "__main__":
     main()

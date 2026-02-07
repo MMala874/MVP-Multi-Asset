@@ -21,8 +21,8 @@ def _parse_models(raw: str) -> list[str]:
 
 
 def main():
-    detected_cpus = os.cpu_count() or 1
-    default_jobs = max(1, detected_cpus - 2)
+    detected_cpus = os.cpu_count()
+    default_jobs = detected_cpus or 8
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset", required=True, help="Path to research_dataset.csv")
@@ -35,7 +35,7 @@ def main():
     args = ap.parse_args()
 
     args.n_jobs = max(1, int(args.n_jobs))
-    print(f"Detected CPU count={detected_cpus}, using n_jobs={args.n_jobs}")
+    print(f"Detected CPU count={detected_cpus or 0}, using n_jobs={args.n_jobs}")
 
     for env_key in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
         os.environ[env_key] = str(args.n_jobs)
