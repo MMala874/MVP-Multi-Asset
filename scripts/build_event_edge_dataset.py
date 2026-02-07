@@ -30,7 +30,7 @@ def main() -> None:
     ap.add_argument("--tp_atr", type=float, default=1.5)
     ap.add_argument("--sl_atr", type=float, default=1.0)
     ap.add_argument("--horizon", type=int, default=20)
-    ap.add_argument("--label_mode", choices=["tp_sl_first", "range_expansion"], default="tp_sl_first")
+    ap.add_argument("--label_mode", choices=["triple_barrier", "tp_sl_first", "range_expansion", "directional_expansion"], default="triple_barrier")
     ap.add_argument("--min_event_coverage", type=float, default=0.02)
     ap.add_argument("--max_event_coverage", type=float, default=0.20)
     ap.add_argument("--decision_time", choices=["close", "open_next"], default="close")
@@ -42,6 +42,7 @@ def main() -> None:
     ap.add_argument("--compress_q", type=float, default=0.10)
     ap.add_argument("--expand_k", type=float, default=None)
     ap.add_argument("--expand_lookahead_N", type=int, default=None)
+    ap.add_argument("--dir_k", type=float, default=1.0)
     ap.add_argument("--range_k", type=float, default=2.0)
     ap.add_argument("--add_distributional", action="store_true")
     ap.add_argument("--dist_horizons", default=None)
@@ -78,6 +79,7 @@ def main() -> None:
         max_event_coverage=args.max_event_coverage,
         event_config=event_config or None,
         label_mode=args.label_mode,
+        dir_k=args.dir_k,
         range_k=args.range_k,
     )
 
