@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from edge_discovery.time_utils import ensure_datetime_index
+
 
 def _atr(df: pd.DataFrame, n: int = 14) -> pd.Series:
     prev_close = df["close"].shift(1)
@@ -24,6 +26,7 @@ def _prev_day_levels(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
 
 
 def event_prev_day_sweep_reclaim(df: pd.DataFrame, reclaim_bars: int = 20) -> pd.Series:
+    df = ensure_datetime_index(df)
     lookback = max(int(reclaim_bars), 1)
     pdh, pdl = _prev_day_levels(df)
     sweep_up = df["high"] > pdh
@@ -69,6 +72,7 @@ def event_liquidity_void_fill_proxy(df: pd.DataFrame, gap_k_atr: float = 1.6, fi
 
 
 def build_event_matrix(df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
+    df = ensure_datetime_index(df)
     cfg = config or {}
     out = pd.DataFrame(index=df.index)
     out["E_prev_day_sweep_reclaim"] = event_prev_day_sweep_reclaim(df, reclaim_bars=int(cfg.get("reclaim_bars", 20)))
