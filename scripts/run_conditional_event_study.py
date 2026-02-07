@@ -46,6 +46,14 @@ def _prepare_dataset(path: str) -> pd.DataFrame:
     df = df.loc[ts.notna()].copy()
     df["timestamp"] = ts[ts.notna()]
     df = df.sort_values("timestamp").reset_index(drop=True)
+    dropped_nan_labels = 0
+    if "label" in df.columns:
+        lab = pd.to_numeric(df["label"], errors="coerce")
+        keep = lab.notna()
+        dropped_nan_labels = int((~keep).sum())
+        df = df.loc[keep].copy()
+        df["label"] = lab.loc[keep].astype(float)
+    print(f"dropped_nan_labels={dropped_nan_labels}")
     df["year"] = df["timestamp"].dt.year.astype(int)
 
     bad = [c for c in df.columns if any(tok in c.lower() for tok in FORBIDDEN_TOKENS)]

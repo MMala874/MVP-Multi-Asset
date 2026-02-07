@@ -7,7 +7,7 @@ import pandas as pd
 def _atr(df: pd.DataFrame, n: int = 14) -> pd.Series:
     pc = df["close"].shift(1)
     tr = pd.concat([(df["high"] - df["low"]), (df["high"] - pc).abs(), (df["low"] - pc).abs()], axis=1).max(axis=1)
-    return tr.rolling(n, min_periods=max(5, n // 2)).mean()
+    return tr.rolling(int(n)).mean()
 
 
 def label_tp_sl_first(
@@ -109,3 +109,55 @@ def label_range_expansion(
         labels[i] = 1 if frng >= thr else 0
 
     return pd.Series(labels, index=df.index, name="label")
+
+
+def label_directional_expansion(
+    df: pd.DataFrame,
+    event_mask: pd.Series,
+    horizon: int = 20,
+    dir_k: float = 1.0,
+    atr_len: int = 14,
+) -> pd.DataFrame:
+    atr_t = _atr(df, int(atr_len))
+    n = len(df)
+    highs = df["high"].to_numpy(dtype=float)
+    lows = df["low"].to_numpy(dtype=float)
+    closes = df["close"].to_numpy(dtype=float)
+    ev = event_mask.fillna(False).to_numpy(dtype=bool)
+
+    labels = np.full(n, np.nan)
+    up_move = np.full(n, np.nan)
+    down_move = np.full(n, np.nan)
+    threshold = (float(dir_k) * atr_t).to_numpy()
+
+    h = max(int(horizon), 1)
+    for i in np.flatnonzero(ev):
+        start = i + 1
+        end = min(n - 1, i + h)
+        if start > end:
+            continue
+
+        entry = closes[i]
+        up = float(np.max(highs[start : end + 1]) - entry)
+        down = float(entry - np.min(lows[start : end + 1]))
+        thr = threshold[i]
+
+        up_move[i] = up
+        down_move[i] = down
+
+        if np.isnan(thr):
+            continue
+        if up - down >= thr:
+            labels[i] = 1.0
+        elif down - up >= thr:
+            labels[i] = 0.0
+
+    return pd.DataFrame(
+        {
+            "label": labels,
+            "diag_up_move": up_move,
+            "diag_down_move": down_move,
+            "diag_thr": threshold,
+        },
+        index=df.index,
+    )

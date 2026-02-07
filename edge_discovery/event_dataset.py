@@ -6,7 +6,7 @@ import pandas as pd
 
 from edge_discovery.events import build_event_matrix, event_vol_compress_expand
 from edge_discovery.features import build_causal_features
-from edge_discovery.labeling import label_range_expansion, label_tp_sl_first
+from edge_discovery.labeling import label_directional_expansion, label_range_expansion, label_tp_sl_first
 from edge_discovery.time_utils import ensure_datetime_index
 
 
@@ -31,7 +31,8 @@ def build_event_dataset(
     min_event_coverage: float = 0.02,
     max_event_coverage: float = 0.20,
     event_config: dict | None = None,
-    label_mode: str = "tp_sl_first",
+    label_mode: str = "triple_barrier",
+    dir_k: float = 1.0,
     range_k: float = 2.0,
 ) -> pd.DataFrame:
     ohlc = ensure_datetime_index(ohlc)
@@ -63,7 +64,7 @@ def build_event_dataset(
         coverage_by_event[ev_name] = coverage
         if coverage < min_event_coverage or coverage > max_event_coverage:
             continue
-        if label_mode == "tp_sl_first":
+        if label_mode in {"tp_sl_first", "triple_barrier"}:
             labels = label_tp_sl_first(
                 ohlc,
                 mask,
@@ -80,8 +81,16 @@ def build_event_dataset(
                 range_k=range_k,
                 atr_len=int(cfg.get("atr_len", 14)),
             )
+        elif label_mode == "directional_expansion":
+            labels = label_directional_expansion(
+                ohlc,
+                mask,
+                horizon=horizon,
+                dir_k=dir_k,
+                atr_len=int(cfg.get("atr_len", 14)),
+            )
         else:
-            raise ValueError("label_mode must be tp_sl_first|range_expansion")
+            raise ValueError("label_mode must be triple_barrier|tp_sl_first|range_expansion|directional_expansion")
         label_series = labels["label"] if isinstance(labels, pd.DataFrame) else labels
         ds = pd.concat([features, label_series.rename("label")], axis=1).loc[mask].copy()
         ds["event_name"] = ev_name

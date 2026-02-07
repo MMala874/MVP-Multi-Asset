@@ -43,6 +43,12 @@ def main() -> None:
     _ = args.n_jobs
 
     df = pd.read_parquet(args.dataset) if args.dataset.endswith(".parquet") else pd.read_csv(args.dataset)
+    dropped_nan_labels = 0
+    if "label" in df.columns:
+        mask = pd.to_numeric(df["label"], errors="coerce").notna()
+        dropped_nan_labels = int((~mask).sum())
+        df = df.loc[mask].copy()
+    print(f"dropped_nan_labels={dropped_nan_labels}")
     events = sorted(df["event_name"].dropna().unique().tolist()) if "event_name" in df.columns else ["all"]
 
     rows = []
