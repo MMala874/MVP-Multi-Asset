@@ -7,16 +7,24 @@ from edge_discovery.dataset_builder import build_research_dataset
 from edge_discovery.event_dataset import build_event_dataset, save_dataset
 
 
-FORBIDDEN_TOKENS = ("fwd", "mfe", "mae", "resolution", "outcome", "future", "next", "tp", "sl")
-FORBIDDEN_EXACT = {"bars_to_resolution", "outcome_type"}
+FORBIDDEN_TOKENS = (
+    "fwd",
+    "mfe",
+    "mae",
+    "future",
+    "next",
+    "resolution",
+    "outcome",
+    "tp",
+    "sl",
+    "bars_to_resolution",
+    "outcome_type",
+    "diag_",
+)
 
 
 def _assert_no_forbidden_columns(df: pd.DataFrame) -> None:
-    bad = [
-        c
-        for c in df.columns
-        if c in FORBIDDEN_EXACT or any(tok in c.lower() for tok in FORBIDDEN_TOKENS)
-    ]
+    bad = [c for c in df.columns if any(tok in c.lower() for tok in FORBIDDEN_TOKENS)]
     assert not bad, f"Forbidden columns present: {bad}"
 
 

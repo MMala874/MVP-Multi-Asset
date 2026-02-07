@@ -9,7 +9,7 @@ from edge_discovery.distributional import forward_returns, triple_barrier_expect
 from edge_discovery.event_dataset import build_event_dataset, load_ohlc_csv, save_dataset
 
 
-FORBIDDEN_TOKENS = ("fwd", "mfe", "mae", "resolution", "outcome", "future", "next", "tp", "sl")
+FORBIDDEN_TOKENS = ("fwd", "mfe", "mae", "resolution", "outcome", "future", "next", "tp", "sl", "diag")
 FORBIDDEN_EXACT = {"bars_to_resolution", "outcome_type"}
 
 
@@ -38,8 +38,8 @@ def main() -> None:
     ap.add_argument("--confirm_bars", type=int, default=None)
     ap.add_argument("--within_bars", type=int, default=None)
     ap.add_argument("--fill_bars", type=int, default=None)
-    ap.add_argument("--compress_window", type=int, default=None)
-    ap.add_argument("--compress_q", type=float, default=None)
+    ap.add_argument("--compress_window", type=int, default=96)
+    ap.add_argument("--compress_q", type=float, default=0.10)
     ap.add_argument("--expand_k", type=float, default=None)
     ap.add_argument("--expand_lookahead_N", type=int, default=None)
     ap.add_argument("--range_k", type=float, default=2.0)
@@ -81,15 +81,18 @@ def main() -> None:
         range_k=args.range_k,
     )
 
+    diag_df = None
     if args.add_distributional:
         spread_mode = args.spread_mode or ("column" if "spread" in ohlc.columns else "fixed")
         horizons = [int(x.strip()) for x in (args.dist_horizons or str(args.horizon)).split(",") if x.strip()]
         atr_mults = [float(x.strip()) for x in args.dist_atr_multiples.split(",") if x.strip()]
         idx = pd.to_datetime(ds["timestamp"], utc=True, errors="coerce")
 
+        diag_df = pd.DataFrame(index=ds.index)
+        diag_df["timestamp"] = ds["timestamp"]
         for h in horizons:
             fwd = forward_returns(ohlc, horizon=h)
-            ds[f"diag_fwd_ret_{h}"] = fwd.reindex(idx).to_numpy()
+            diag_df[f"diag_fwd_ret_{h}"] = fwd.reindex(idx).to_numpy()
 
             event_mask = ohlc.index.isin(idx)
             for tp, sl in product(atr_mults, atr_mults):
@@ -106,12 +109,14 @@ def main() -> None:
                 )
                 key = f"tp{tp:g}_sl{sl:g}_H{h}"
                 aligned = tb.reindex(idx)
-                ds[f"diag_r_mult_{key}"] = aligned["r_mult"].to_numpy()
-                ds[f"diag_hit_{key}"] = aligned["hit_type"].to_numpy()
-    else:
-        ds = _drop_diagnostic_columns(ds)
+                diag_df[f"diag_r_mult_{key}"] = aligned["r_mult"].to_numpy()
+                diag_df[f"diag_hit_{key}"] = aligned["hit_type"].to_numpy()
 
+    ds = _drop_diagnostic_columns(ds)
     save_dataset(ds, args.out)
+    if diag_df is not None:
+        diag_out = f"{args.out}.diag.csv"
+        save_dataset(diag_df, diag_out)
 
     counts = ds.assign(year=ds.index.year).groupby("year").size().to_dict()
     print(f"rows={len(ds)}")

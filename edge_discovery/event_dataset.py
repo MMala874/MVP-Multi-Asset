@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from edge_discovery.events import build_event_matrix
+from edge_discovery.events import build_event_matrix, event_vol_compress_expand
 from edge_discovery.features import build_causal_features
 from edge_discovery.labeling import label_range_expansion, label_tp_sl_first
 from edge_discovery.time_utils import ensure_datetime_index
@@ -35,7 +35,15 @@ def build_event_dataset(
     range_k: float = 2.0,
 ) -> pd.DataFrame:
     ohlc = ensure_datetime_index(ohlc)
-    events = build_event_matrix(ohlc, config=event_config)
+    cfg = event_config or {}
+    events = build_event_matrix(ohlc, config=cfg)
+    if event in {"vol_compress_expand", "E_vol_compress_expand"}:
+        events["E_vol_compress_expand"] = event_vol_compress_expand(
+            ohlc,
+            compress_window=int(cfg.get("compress_window", 96)),
+            compress_q=float(cfg.get("compress_q", 0.1)),
+            atr_len=int(cfg.get("atr_len", 14)),
+        )
     features = build_causal_features(ohlc)
 
     event_cols = [c for c in events.columns if c.startswith("E_")]
@@ -67,12 +75,15 @@ def build_event_dataset(
         elif label_mode == "range_expansion":
             labels = label_range_expansion(
                 ohlc,
+                mask,
                 horizon=horizon,
                 range_k=range_k,
+                atr_len=int(cfg.get("atr_len", 14)),
             )
         else:
             raise ValueError("label_mode must be tp_sl_first|range_expansion")
-        ds = pd.concat([features, labels[["label"]]], axis=1).loc[mask].copy()
+        label_series = labels["label"] if isinstance(labels, pd.DataFrame) else labels
+        ds = pd.concat([features, label_series.rename("label")], axis=1).loc[mask].copy()
         ds["event_name"] = ev_name
         ds = ds.dropna(subset=["label"])
         rows.append(ds)
