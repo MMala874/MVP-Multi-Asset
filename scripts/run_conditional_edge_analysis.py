@@ -6,16 +6,6 @@ from pathlib import Path
 import pandas as pd
 
 
-def _to_records(df: pd.DataFrame) -> list[dict]:
-    if df.empty:
-        return []
-    out = df.copy()
-    for c in out.columns:
-        if pd.api.types.is_float_dtype(out[c]):
-            out[c] = out[c].round(6)
-    return out.to_dict(orient="records")
-
-
 def _parse_models(raw: str) -> list[str]:
     return [m.strip().lower() for m in raw.split(",") if m.strip()]
 
@@ -62,19 +52,7 @@ def main():
         target_threshold=args.target_threshold,
     )
 
-    out_payload = {
-        "decision": report["decision"],
-        "stability_report": report["stability_report"],
-        "feature_importance_stability": _to_records(report["feature_importance_stability"]),
-        "per_year_performance": _to_records(report["per_year_performance"]),
-        "top_stable_feature_interactions": _to_records(report["top_stable_feature_interactions"]),
-        "regions_consistent_ptp_gt_055": _to_records(report["regions_consistent_ptp_gt_055"]),
-        "event_types_persistent_skew": _to_records(report["event_types_persistent_skew"]),
-        "fold_lift_vs_baseline": _to_records(report["fold_performance"][["fold_id", "test_year", "model", "baseline_tp_rate", "region_tp_rate", "lift_abs", "lift_ratio", "region_coverage", "auc"]]),
-        "xgb_top_features_by_fold": _to_records(report["xgb_top_features_by_fold"]),
-    }
-
-    out_path.write_text(json.dumps(out_payload, indent=2), encoding="utf-8")
+    out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(f"Saved: {out_path}")
 
 
