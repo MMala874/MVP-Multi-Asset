@@ -20,10 +20,12 @@ FORBIDDEN_PATTERNS = re.compile(
 
 
 def enforce_leakage_firewall(feature_columns: list[str]) -> dict[str, list[str]]:
-    diagnostic = [c for c in feature_columns if c.lower().startswith("diag_") or c.lower().startswith("targets_")]
-    inspectable = [c for c in feature_columns if c not in diagnostic]
-    blocked = [c for c in inspectable if FORBIDDEN_PATTERNS.search(c)]
-    allowed = [c for c in inspectable if c not in blocked]
+    diagnostic = [c for c in feature_columns if c.lower().startswith("diag_") or "diag" in c.lower() or c.lower().startswith("targets_")]
+    if diagnostic:
+        raise ValueError(f"Leakage firewall triggered; diagnostic columns are forbidden as features: {diagnostic}")
+
+    blocked = [c for c in feature_columns if FORBIDDEN_PATTERNS.search(c)]
+    allowed = [c for c in feature_columns if c not in blocked]
     if blocked:
         raise ValueError(f"Leakage firewall triggered; forbidden columns found: {blocked}")
     return {"blocked": blocked, "allowed": allowed, "diagnostic_excluded": diagnostic}

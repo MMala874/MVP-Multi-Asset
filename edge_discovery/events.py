@@ -75,23 +75,17 @@ def event_vol_compress_expand(
     df: pd.DataFrame,
     compress_window: int = 96,
     compress_q: float = 0.1,
-    expand_k: float = 1.6,
-    lookahead_N: int = 8,
+    atr_len: int = 14,
+    **_: object,
 ) -> pd.Series:
-    """Compression regime event decidable at close(t).
-
-    Note: for leak-free decision-time at close(t), this event returns only the
-    compression condition at t. Expansion is handled by forward-looking labels.
-    """
-    _ = float(expand_k)
-    _ = int(lookahead_N)
+    """Compression regime event decidable at close(t) using only info <= t."""
     window = max(int(compress_window), 2)
     q = float(compress_q)
 
-    atr = _atr(df, 14)
-    rel_range = (df["high"] - df["low"]) / atr.replace(0.0, pd.NA)
-    compression_score = rel_range.rolling(window, min_periods=max(10, window // 2)).quantile(q).shift(1)
-    is_compressed = (rel_range <= compression_score).fillna(False)
+    atr = _atr(df, int(atr_len))
+    ratio = (df["high"] - df["low"]) / atr.replace(0.0, pd.NA)
+    compression_score = ratio.rolling(window, min_periods=max(10, window // 2)).quantile(q).shift(1)
+    is_compressed = (ratio <= compression_score).fillna(False)
     return is_compressed.rename("E_vol_compress_expand")
 
 
@@ -124,8 +118,7 @@ def build_event_matrix(df: pd.DataFrame, config: dict | None = None) -> pd.DataF
         df,
         compress_window=int(cfg.get("compress_window", 96)),
         compress_q=float(cfg.get("compress_q", 0.1)),
-        expand_k=float(cfg.get("expand_k", 1.6)),
-        lookahead_N=int(cfg.get("expand_lookahead_N", 8)),
+        atr_len=int(cfg.get("atr_len", 14)),
     )
     out["event_mask"] = out.any(axis=1)
     return out
