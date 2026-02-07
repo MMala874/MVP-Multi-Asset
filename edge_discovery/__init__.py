@@ -14,4 +14,6 @@ __all__ = [
     "event_study",
     "modeling",
     "event_dataset",
+    "conditional_study",
+    "regime_filters",
 ]
