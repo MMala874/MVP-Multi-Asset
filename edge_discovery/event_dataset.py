@@ -6,7 +6,7 @@ import pandas as pd
 
 from edge_discovery.events import build_event_matrix
 from edge_discovery.features import build_causal_features
-from edge_discovery.labeling import label_tp_sl_first
+from edge_discovery.labeling import label_range_expansion, label_tp_sl_first
 from edge_discovery.time_utils import ensure_datetime_index
 
 
@@ -31,6 +31,8 @@ def build_event_dataset(
     min_event_coverage: float = 0.02,
     max_event_coverage: float = 0.20,
     event_config: dict | None = None,
+    label_mode: str = "tp_sl_first",
+    range_k: float = 2.0,
 ) -> pd.DataFrame:
     ohlc = ensure_datetime_index(ohlc)
     events = build_event_matrix(ohlc, config=event_config)
@@ -53,10 +55,26 @@ def build_event_dataset(
         coverage_by_event[ev_name] = coverage
         if coverage < min_event_coverage or coverage > max_event_coverage:
             continue
-        labels = label_tp_sl_first(ohlc, mask, tp_atr=tp_atr, sl_atr=sl_atr, horizon=horizon, decision_time=decision_time)
+        if label_mode == "tp_sl_first":
+            labels = label_tp_sl_first(
+                ohlc,
+                mask,
+                tp_atr=tp_atr,
+                sl_atr=sl_atr,
+                horizon=horizon,
+                decision_time=decision_time,
+            )
+        elif label_mode == "range_expansion":
+            labels = label_range_expansion(
+                ohlc,
+                horizon=horizon,
+                range_k=range_k,
+            )
+        else:
+            raise ValueError("label_mode must be tp_sl_first|range_expansion")
         ds = pd.concat([features, labels[["label"]]], axis=1).loc[mask].copy()
         ds["event_name"] = ev_name
-        ds = ds.dropna(subset=["label"]) 
+        ds = ds.dropna(subset=["label"])
         rows.append(ds)
 
     if not rows:

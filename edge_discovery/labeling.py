@@ -76,3 +76,46 @@ def label_tp_sl_first(
         },
         index=df.index,
     )
+
+
+def label_range_expansion(
+    df: pd.DataFrame,
+    horizon: int = 20,
+    range_k: float = 2.0,
+) -> pd.DataFrame:
+    atr_t = _atr(df, 14)
+    n = len(df)
+    highs = df["high"].to_numpy()
+    lows = df["low"].to_numpy()
+
+    lab = np.full(n, np.nan)
+    future_range = np.full(n, np.nan)
+    threshold = (range_k * atr_t).to_numpy()
+    timeout = np.zeros(n, dtype=int)
+
+    h = max(int(horizon), 1)
+    for i in range(n):
+        start = i + 1
+        end = min(n - 1, i + h)
+        if start > end:
+            lab[i] = 0
+            future_range[i] = 0.0
+            continue
+        fmax = highs[start : end + 1].max()
+        fmin = lows[start : end + 1].min()
+        frng = float(fmax - fmin)
+        future_range[i] = frng
+        thr = threshold[i]
+        if np.isnan(thr):
+            continue
+        lab[i] = 1 if frng >= thr else 0
+
+    return pd.DataFrame(
+        {
+            "label": lab,
+            "future_range": future_range,
+            "range_threshold": threshold,
+            "timeout": timeout,
+        },
+        index=df.index,
+    )

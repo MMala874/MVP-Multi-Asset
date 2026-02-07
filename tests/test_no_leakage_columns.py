@@ -58,3 +58,25 @@ def test_event_dataset_export_has_no_forbidden_columns(tmp_path) -> None:
 
     event_df = pd.read_csv(event_path)
     _assert_no_forbidden_columns(event_df)
+
+
+def test_event_dataset_range_expansion_mode_has_no_forbidden_columns(tmp_path) -> None:
+    df = _make_ohlc()
+    ds = build_event_dataset(
+        df,
+        event="vol_compress_expand",
+        tp_atr=1.5,
+        sl_atr=1.0,
+        horizon=20,
+        min_event_coverage=0.0,
+        max_event_coverage=1.0,
+        label_mode="range_expansion",
+        range_k=2.0,
+        event_config={"compress_window": 96, "compress_q": 0.1},
+    )
+
+    event_path = tmp_path / "event_ds_range_expansion_test.csv"
+    save_dataset(ds, str(event_path))
+
+    event_df = pd.read_csv(event_path)
+    _assert_no_forbidden_columns(event_df)
