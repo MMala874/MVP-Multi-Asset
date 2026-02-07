@@ -24,11 +24,23 @@ def _parse_dataset(dataset: pd.DataFrame) -> pd.DataFrame:
     if "timestamp" in df.columns:
         ts = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
         df = df.loc[ts.notna()].copy()
-        df.index = ts[ts.notna()]
-    elif not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.DatetimeIndex(ts[ts.notna()], name="timestamp")
+    elif isinstance(df.index, pd.DatetimeIndex):
+        idx = pd.to_datetime(df.index, utc=True, errors="coerce")
+        df = df.loc[idx.notna()].copy()
+        df.index = pd.DatetimeIndex(idx[idx.notna()], name="timestamp")
+    else:
         raise ValueError("Dataset must provide timestamp column or DatetimeIndex")
-    df = df.sort_index()
-    return df
+    return df.sort_index()
+
+
+def _finite_assert(X: pd.DataFrame) -> None:
+    bad = ~np.isfinite(X.to_numpy(dtype=float))
+    if not bad.any():
+        return
+    counts = dict(zip(X.columns, bad.sum(axis=0).tolist()))
+    bad_counts = {k: v for k, v in counts.items() if v > 0}
+    raise ValueError(f"Non-finite values found in features: {bad_counts}")
 
 
 def _bh_fdr(pvals: list[float]) -> list[float]:
@@ -64,12 +76,13 @@ def _make_folds(index: pd.DatetimeIndex, train_years: int, test_years: int, purg
     uniq = sorted(years.unique())
     out: list[FoldData] = []
     for test_start in uniq:
-        tr = np.where((years >= test_start - train_years) & (years < test_start))[0]
+        train_start = test_start - train_years
+        tr = np.where((years >= train_start) & (years < test_start))[0]
         te = np.where((years >= test_start) & (years < test_start + test_years))[0]
         if len(tr) == 0 or len(te) == 0:
             continue
-        left = max(0, te.min() - purge_bars)
-        right = min(len(index) - 1, te.max() + purge_bars)
+        left = max(0, int(te.min()) - purge_bars)
+        right = min(len(index) - 1, int(te.max()) + purge_bars)
         tr = tr[(tr < left) | (tr > right)]
         if len(tr) == 0:
             continue
@@ -98,7 +111,7 @@ def _build_models(models: list[str], n_jobs: int, no_xgboost: bool) -> dict[str,
     out: dict[str, Any] = {}
     for m in models:
         if m == "logreg":
-            out[m] = LogisticRegression(max_iter=2000, solver="lbfgs", random_state=42)
+            out[m] = LogisticRegression(max_iter=3000, solver="saga", random_state=42)
         elif m == "gb":
             out[m] = HistGradientBoostingClassifier(max_depth=3, learning_rate=0.05, max_iter=300, random_state=42)
         elif m == "xgb" and not no_xgboost:
@@ -122,11 +135,9 @@ def _build_models(models: list[str], n_jobs: int, no_xgboost: bool) -> dict[str,
 
 def _importance(model: Any, cols: list[str]) -> pd.Series:
     if hasattr(model, "feature_importances_"):
-        vals = np.asarray(model.feature_importances_, dtype=float)
-        return pd.Series(vals, index=cols)
+        return pd.Series(np.asarray(model.feature_importances_, dtype=float), index=cols)
     if hasattr(model, "coef_"):
-        vals = np.abs(np.asarray(model.coef_[0], dtype=float))
-        return pd.Series(vals, index=cols)
+        return pd.Series(np.abs(np.asarray(model.coef_[0], dtype=float)), index=cols)
     if hasattr(model, "get_booster"):
         score = model.get_booster().get_score(importance_type="gain")
         return pd.Series([score.get(f"f{i}", 0.0) for i in range(len(cols))], index=cols)
@@ -145,49 +156,50 @@ def run_conditional_edge_analysis(
     holdout_years: int = 1,
     no_xgboost: bool = False,
 ) -> dict[str, Any]:
+    del holdout_years
     df = _parse_dataset(dataset)
+
     numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and c != "label"]
-    X_all = df[numeric_cols].replace([np.inf, -np.inf], np.nan)
+    X_all = df[numeric_cols].astype(float)
     y_all = pd.to_numeric(df["label"], errors="coerce")
     valid = y_all.isin([0, 1])
     X_all, y_all = X_all.loc[valid], y_all.loc[valid].astype(int)
-
-    if X_all.isna().any().any():
-        X_all = X_all.fillna(X_all.median(numeric_only=True))
+    _finite_assert(X_all)
 
     years = X_all.index.year
-    max_year = int(years.max())
-    holdout_mask = years >= (max_year - holdout_years + 1)
+    holdout_year = int(years.max())
+    holdout_mask = years == holdout_year
     X_dev, y_dev = X_all.loc[~holdout_mask], y_all.loc[~holdout_mask]
     X_hold, y_hold = X_all.loc[holdout_mask], y_all.loc[holdout_mask]
 
     folds = _make_folds(X_dev.index, rolling_train_years, rolling_test_years, purge_bars)
     if not folds:
-        raise ValueError("No valid folds produced.")
+        raise ValueError("No valid validation folds produced with 3y/1y rolling split and purge.")
 
-    models = [m.strip().lower() for m in (models or ["logreg", "gb", "xgb"]) if m.strip()]
-    model_objs = _build_models(models, n_jobs=n_jobs, no_xgboost=no_xgboost)
+    model_names = [m.strip().lower() for m in (models or ["logreg", "gb", "xgb"]) if m.strip()]
+    model_objs = _build_models(model_names, n_jobs=max(1, n_jobs), no_xgboost=no_xgboost)
+    if not model_objs:
+        raise ValueError("No usable models were initialized.")
+
+    def split_metrics(y: pd.Series, p: np.ndarray) -> dict[str, float]:
+        thr = float(np.quantile(p, 1 - coverage)) if len(p) else 1.0
+        sel = p >= thr
+        base = float(y.mean())
+        reg = float(y[sel].mean()) if sel.any() else float("nan")
+        lift = reg - base if np.isfinite(reg) else float("nan")
+        auc = float(roc_auc_score(y, p)) if y.nunique() > 1 else float("nan")
+        pval = _one_sided_two_prop_p(int(y[sel].sum()), int(sel.sum()), int(y[~sel].sum()), int((~sel).sum())) if sel.any() and (~sel).any() else float("nan")
+        return {"auc": auc, "lift": lift, "pval": pval}
 
     def eval_fold(model_name: str, fold: FoldData) -> dict[str, Any]:
         Xtr, ytr = X_dev.iloc[fold.train_idx], y_dev.iloc[fold.train_idx]
         Xte, yte = X_dev.iloc[fold.test_idx], y_dev.iloc[fold.test_idx]
         kept = _drop_corr(Xtr, 0.85)
         Xtr, Xte = Xtr[kept], Xte[kept]
-        model = model_objs[model_name]
+        model = _build_models([model_name], n_jobs=max(1, n_jobs), no_xgboost=no_xgboost)[model_name]
         model.fit(Xtr, ytr)
         p_tr = model.predict_proba(Xtr)[:, 1]
         p_te = model.predict_proba(Xte)[:, 1]
-
-        def split_metrics(y: pd.Series, p: np.ndarray) -> dict[str, float]:
-            thr = float(np.quantile(p, 1 - coverage)) if len(p) else 1.0
-            sel = p >= thr
-            base = float(y.mean())
-            reg = float(y[sel].mean()) if sel.any() else float("nan")
-            lift = reg - base if np.isfinite(reg) else float("nan")
-            auc = float(roc_auc_score(y, p)) if y.nunique() > 1 else float("nan")
-            pval = _one_sided_two_prop_p(int(y[sel].sum()), int(sel.sum()), int(y[~sel].sum()), int((~sel).sum())) if sel.any() and (~sel).any() else float("nan")
-            return {"auc": auc, "lift": lift, "pval": pval}
-
         imp = _importance(model, kept).sort_values(ascending=False).head(10).index.tolist()
         return {
             "model": model_name,
@@ -197,77 +209,70 @@ def run_conditional_edge_analysis(
             "top_features": imp,
         }
 
-    fold_results = Parallel(n_jobs=n_jobs)(
-        delayed(eval_fold)(m, f)
-        for m in model_objs
-        for f in folds
-    )
+    fold_results = Parallel(n_jobs=max(1, n_jobs))(delayed(eval_fold)(m, f) for m in model_objs for f in folds)
 
     by_model: dict[str, list[dict[str, Any]]] = {}
     for r in fold_results:
         by_model.setdefault(r["model"], []).append(r)
+
     best_model = max(by_model, key=lambda m: np.nanmean([x["val"]["auc"] for x in by_model[m]]))
+    best_folds = sorted(by_model[best_model], key=lambda x: x["year"])
 
-    X_dev_sel = X_dev[_drop_corr(X_dev, 0.85)]
-    X_hold_sel = X_hold[X_dev_sel.columns]
-    final_model = _build_models([best_model], n_jobs=n_jobs, no_xgboost=no_xgboost)[best_model]
+    kept_final = _drop_corr(X_dev, 0.85)
+    X_dev_sel = X_dev[kept_final]
+    X_hold_sel = X_hold[kept_final]
+    final_model = _build_models([best_model], n_jobs=max(1, n_jobs), no_xgboost=no_xgboost)[best_model]
     final_model.fit(X_dev_sel, y_dev)
+
     p_hold = final_model.predict_proba(X_hold_sel)[:, 1]
-    thr_h = float(np.quantile(p_hold, 1 - coverage)) if len(p_hold) else 1.0
-    sel_h = p_hold >= thr_h
-    hold_auc = float(roc_auc_score(y_hold, p_hold)) if y_hold.nunique() > 1 else float("nan")
-    hold_base = float(y_hold.mean())
-    hold_region = float(y_hold[sel_h].mean()) if sel_h.any() else float("nan")
-    hold_lift = hold_region - hold_base if np.isfinite(hold_region) else float("nan")
-    hold_p = _one_sided_two_prop_p(int(y_hold[sel_h].sum()), int(sel_h.sum()), int(y_hold[~sel_h].sum()), int((~sel_h).sum())) if sel_h.any() and (~sel_h).any() else float("nan")
+    hold_metrics = split_metrics(y_hold, p_hold)
 
-    best_folds = by_model[best_model]
     per_year_lift = {str(r["year"]): r["val"]["lift"] for r in best_folds}
-    raw_pvals = [r["val"]["pval"] for r in best_folds] + [hold_p]
-    adj_pvals = _bh_fdr(raw_pvals)
-    hold_p_adj = adj_pvals[-1]
+    year_lifts = np.array([v for v in per_year_lift.values() if np.isfinite(v)], dtype=float)
+    neg_ratio = float((year_lifts < 0).mean()) if len(year_lifts) else 1.0
 
-    # stability
+    raw_pvals = [r["val"]["pval"] for r in best_folds] + [hold_metrics["pval"]]
+    adj_pvals = _bh_fdr(raw_pvals)
+
     counts: dict[str, int] = {}
     for r in best_folds:
         for f in r["top_features"]:
             counts[f] = counts.get(f, 0) + 1
-    stable = [f for f, c in counts.items() if c / len(best_folds) >= 0.6]
 
-    year_lifts = np.array([v for v in per_year_lift.values() if np.isfinite(v)], dtype=float)
-    dominance = (float(year_lifts.max()) / float(year_lifts.sum())) if len(year_lifts) and year_lifts.sum() > 0 else 1.0
-    instability_high = len(stable) < 3
+    reasons: list[str] = []
+    if hold_metrics["auc"] < max(0.55, target_threshold):
+        reasons.append(f"holdout_auc {hold_metrics['auc']:.4f} < 0.55")
+    if hold_metrics["lift"] < 0.08:
+        reasons.append(f"holdout_lift {hold_metrics['lift']:.4f} < 0.08 at coverage={coverage}")
+    if neg_ratio > 0.20:
+        reasons.append(f"negative per-year in-sample lift ratio {neg_ratio:.2%} > 20%")
 
-    if (hold_auc <= target_threshold) or (hold_lift <= 0.03) or instability_high:
-        decision = "REJECT_EDGE"
-        reason = "Failed holdout gate or instability gate"
-    elif (not np.isfinite(hold_p_adj)) or (hold_p_adj > 0.05) or (dominance > 0.7):
-        decision = "REJECT_EDGE"
-        reason = "Failed significance/FDR or per-year dominance gate"
-    else:
-        decision = "ACCEPT_EDGE"
-        reason = "Holdout and stability gates passed"
+    decision = "ACCEPT_EDGE" if not reasons else "REJECT_EDGE"
+    reason = "All gates passed" if not reasons else "; ".join(reasons)
 
     return {
         "decision": decision,
         "reason": reason,
+        "selected_model": best_model,
         "metrics": {
             "train_auc": float(np.nanmean([x["train"]["auc"] for x in best_folds])),
             "val_auc": float(np.nanmean([x["val"]["auc"] for x in best_folds])),
-            "holdout_auc": hold_auc,
+            "holdout_auc": float(hold_metrics["auc"]),
             "train_lift": float(np.nanmean([x["train"]["lift"] for x in best_folds])),
             "val_lift": float(np.nanmean([x["val"]["lift"] for x in best_folds])),
-            "holdout_lift": hold_lift,
+            "holdout_lift": float(hold_metrics["lift"]),
             "coverage": coverage,
-            "p_values": {
-                "raw": {**{f"val_{i}": p for i, p in enumerate(raw_pvals[:-1], start=1)}, "holdout": hold_p},
-                "adjusted": {**{f"val_{i}": p for i, p in enumerate(adj_pvals[:-1], start=1)}, "holdout": hold_p_adj},
-            },
             "per_year_lift": per_year_lift,
+            "neg_year_lift_ratio": neg_ratio,
+            "p_values": {
+                "raw": {**{f"val_{i}": p for i, p in enumerate(raw_pvals[:-1], start=1)}, "holdout": raw_pvals[-1]},
+                "adjusted": {**{f"val_{i}": p for i, p in enumerate(adj_pvals[:-1], start=1)}, "holdout": adj_pvals[-1]},
+            },
         },
         "stability_report": {
             "folds": len(best_folds),
-            "final_stable_features": stable,
-            "feature_importance_stability": [{"feature": k, "fold_freq": v / len(best_folds)} for k, v in sorted(counts.items(), key=lambda x: -x[1])],
+            "feature_importance_stability": [
+                {"feature": k, "fold_freq": v / len(best_folds)} for k, v in sorted(counts.items(), key=lambda x: -x[1])
+            ],
         },
     }

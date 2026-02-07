@@ -16,7 +16,7 @@ def main() -> None:
     ap.add_argument("--output", required=True)
     ap.add_argument("--models", default="xgb,logreg,gb")
     ap.add_argument("--no-xgboost", action="store_true")
-    ap.add_argument("--n_jobs", type=int, default=1)
+    ap.add_argument("--n_jobs", type=int, default=(os.cpu_count() or 1))
     ap.add_argument("--target_threshold", type=float, default=0.55)
     ap.add_argument("--purge_bars", type=int, default=10)
     ap.add_argument("--rolling_train_years", type=int, default=3)
@@ -25,7 +25,7 @@ def main() -> None:
     ap.add_argument("--coverage", type=float, default=0.04)
     args = ap.parse_args()
 
-    n_jobs = max(1, args.n_jobs)
+    n_jobs = max(1, int(args.n_jobs))
     for k in ["OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"]:
         os.environ[k] = str(n_jobs)
 
