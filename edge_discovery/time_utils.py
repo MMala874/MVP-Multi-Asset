@@ -19,10 +19,22 @@ def ensure_datetime_index(
     """
     out = df.copy()
 
-    if isinstance(out.index, pd.DatetimeIndex):
-        return out
+    def _finalize_datetime_index(frame: pd.DataFrame, dt_values: pd.Series | pd.DatetimeIndex) -> pd.DataFrame:
+        idx = pd.DatetimeIndex(dt_values)
+        if idx.tz is None:
+            idx = idx.tz_localize("UTC")
+        else:
+            idx = idx.tz_convert("UTC")
+        idx = idx.rename("timestamp")
+        frame.index = idx
+        frame = frame[~frame.index.duplicated(keep="last")]
+        return frame.sort_index()
 
-    candidate_names = [c for c in prefer_cols if c in out.columns]
+    if isinstance(out.index, pd.DatetimeIndex):
+        return _finalize_datetime_index(out, out.index)
+
+    col_lookup = {str(c).lower(): c for c in out.columns}
+    candidate_names = [col_lookup[c.lower()] for c in prefer_cols if c.lower() in col_lookup]
     candidate_sources: list[tuple[str, pd.Series]] = [(c, out[c]) for c in candidate_names]
     candidate_sources.append(("index", pd.Series(out.index, index=out.index)))
 
@@ -33,9 +45,7 @@ def ensure_datetime_index(
             if source_name != "index":
                 out = out.loc[dt.notna()].copy()
                 dt = dt.loc[dt.notna()]
-            out.index = pd.DatetimeIndex(dt)
-            return out.sort_index()
+            return _finalize_datetime_index(out, dt)
 
     expected = "/".join(prefer_cols)
     raise ValueError(f"No datetime column found (expected one of: {expected})")
-

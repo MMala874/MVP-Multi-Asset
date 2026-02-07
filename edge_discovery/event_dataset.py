@@ -12,11 +12,12 @@ from edge_discovery.time_utils import ensure_datetime_index
 
 def load_ohlc_csv(path: str) -> pd.DataFrame:
     df = pd.read_csv(path)
+    df.columns = [str(c).lower() for c in df.columns]
     df = ensure_datetime_index(df)
     for c in ["open", "high", "low", "close"]:
         if c not in df.columns:
             raise ValueError(f"Missing OHLC column: {c}")
-        df[c] = pd.to_numeric(df[c], errors="coerce")
+        df[c] = pd.to_numeric(df[c], errors="coerce").astype(float)
     return df.dropna(subset=["open", "high", "low", "close"]).sort_index()
 
 
