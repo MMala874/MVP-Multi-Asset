@@ -30,9 +30,10 @@ def build_event_dataset(
     decision_time: str = "close",
     min_event_coverage: float = 0.02,
     max_event_coverage: float = 0.20,
+    event_config: dict | None = None,
 ) -> pd.DataFrame:
     ohlc = ensure_datetime_index(ohlc)
-    events = build_event_matrix(ohlc)
+    events = build_event_matrix(ohlc, config=event_config)
     features = build_causal_features(ohlc)
 
     event_cols = [c for c in events.columns if c.startswith("E_")]
@@ -45,9 +46,11 @@ def build_event_dataset(
         selected = [key]
 
     rows = []
+    coverage_by_event: dict[str, float] = {}
     for ev_name in selected:
         mask = events[ev_name].astype(bool)
         coverage = float(mask.mean())
+        coverage_by_event[ev_name] = coverage
         if coverage < min_event_coverage or coverage > max_event_coverage:
             continue
         labels = label_tp_sl_first(ohlc, mask, tp_atr=tp_atr, sl_atr=sl_atr, horizon=horizon, decision_time=decision_time)
@@ -57,7 +60,13 @@ def build_event_dataset(
         rows.append(ds)
 
     if not rows:
-        raise ValueError("No events passed the coverage gate")
+        coverage_msg = ", ".join(f"{name}={cov:.4%}" for name, cov in coverage_by_event.items())
+        raise ValueError(
+            "No events passed the coverage gate "
+            f"(min={min_event_coverage:.2%}, max={max_event_coverage:.2%}). "
+            f"Coverage: {coverage_msg}. "
+            "Suggerimento: prova override --reclaim_bars 4 --confirm_bars 4 --within_bars 6 --fill_bars 6"
+        )
 
     out = pd.concat(rows).sort_index()
     out.insert(0, "timestamp", out.index.tz_convert("UTC").strftime("%Y-%m-%dT%H:%M:%SZ"))

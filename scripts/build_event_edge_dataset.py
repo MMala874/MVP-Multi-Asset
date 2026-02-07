@@ -29,7 +29,22 @@ def main() -> None:
     ap.add_argument("--min_event_coverage", type=float, default=0.02)
     ap.add_argument("--max_event_coverage", type=float, default=0.20)
     ap.add_argument("--decision_time", choices=["close", "open_next"], default="close")
+    ap.add_argument("--reclaim_bars", type=int, default=None)
+    ap.add_argument("--confirm_bars", type=int, default=None)
+    ap.add_argument("--within_bars", type=int, default=None)
+    ap.add_argument("--fill_bars", type=int, default=None)
     args = ap.parse_args()
+
+    event_config = {
+        k: v
+        for k, v in {
+            "reclaim_bars": args.reclaim_bars,
+            "confirm_bars": args.confirm_bars,
+            "within_bars": args.within_bars,
+            "fill_bars": args.fill_bars,
+        }.items()
+        if v is not None
+    }
 
     ohlc = load_ohlc_csv(args.csv)
     ds = build_event_dataset(
@@ -41,6 +56,7 @@ def main() -> None:
         decision_time=args.decision_time,
         min_event_coverage=args.min_event_coverage,
         max_event_coverage=args.max_event_coverage,
+        event_config=event_config or None,
     )
     ds = _drop_diagnostic_columns(ds)
     save_dataset(ds, args.out)
