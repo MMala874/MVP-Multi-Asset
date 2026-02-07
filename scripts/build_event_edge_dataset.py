@@ -30,6 +30,7 @@ def main() -> None:
     ap.add_argument("--tp_atr", type=float, default=1.5)
     ap.add_argument("--sl_atr", type=float, default=1.0)
     ap.add_argument("--horizon", type=int, default=20)
+    ap.add_argument("--label_mode", choices=["tp_sl_first", "range_expansion"], default="tp_sl_first")
     ap.add_argument("--min_event_coverage", type=float, default=0.02)
     ap.add_argument("--max_event_coverage", type=float, default=0.20)
     ap.add_argument("--decision_time", choices=["close", "open_next"], default="close")
@@ -37,6 +38,11 @@ def main() -> None:
     ap.add_argument("--confirm_bars", type=int, default=None)
     ap.add_argument("--within_bars", type=int, default=None)
     ap.add_argument("--fill_bars", type=int, default=None)
+    ap.add_argument("--compress_window", type=int, default=None)
+    ap.add_argument("--compress_q", type=float, default=None)
+    ap.add_argument("--expand_k", type=float, default=None)
+    ap.add_argument("--expand_lookahead_N", type=int, default=None)
+    ap.add_argument("--range_k", type=float, default=2.0)
     ap.add_argument("--add_distributional", action="store_true")
     ap.add_argument("--dist_horizons", default=None)
     ap.add_argument("--dist_atr_multiples", default="1.0,1.5")
@@ -52,6 +58,10 @@ def main() -> None:
             "confirm_bars": args.confirm_bars,
             "within_bars": args.within_bars,
             "fill_bars": args.fill_bars,
+            "compress_window": args.compress_window,
+            "compress_q": args.compress_q,
+            "expand_k": args.expand_k,
+            "expand_lookahead_N": args.expand_lookahead_N,
         }.items()
         if v is not None
     }
@@ -67,6 +77,8 @@ def main() -> None:
         min_event_coverage=args.min_event_coverage,
         max_event_coverage=args.max_event_coverage,
         event_config=event_config or None,
+        label_mode=args.label_mode,
+        range_k=args.range_k,
     )
 
     if args.add_distributional:
@@ -106,6 +118,8 @@ def main() -> None:
     print(f"coverage={len(ds) / len(ohlc):.4%}")
     print(f"pos_rate={ds['label'].mean():.4f}")
     print(f"year_counts={counts}")
+    print(f"label_mode={args.label_mode}")
+    print(f"event_name={args.event}")
     print("event_engine=causal_state_machine")
     print(f"saved={args.out}")
 

@@ -71,6 +71,30 @@ def event_liquidity_void_fill_proxy(df: pd.DataFrame, gap_k_atr: float = 1.6, fi
     return (fill_flag & recent_void).rename("E_liquidity_void_fill_proxy")
 
 
+def event_vol_compress_expand(
+    df: pd.DataFrame,
+    compress_window: int = 96,
+    compress_q: float = 0.1,
+    expand_k: float = 1.6,
+    lookahead_N: int = 8,
+) -> pd.Series:
+    """Compression regime event decidable at close(t).
+
+    Note: for leak-free decision-time at close(t), this event returns only the
+    compression condition at t. Expansion is handled by forward-looking labels.
+    """
+    _ = float(expand_k)
+    _ = int(lookahead_N)
+    window = max(int(compress_window), 2)
+    q = float(compress_q)
+
+    atr = _atr(df, 14)
+    rel_range = (df["high"] - df["low"]) / atr.replace(0.0, pd.NA)
+    compression_score = rel_range.rolling(window, min_periods=max(10, window // 2)).quantile(q).shift(1)
+    is_compressed = (rel_range <= compression_score).fillna(False)
+    return is_compressed.rename("E_vol_compress_expand")
+
+
 def build_event_matrix(df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
     df = ensure_datetime_index(df)
     cfg = config or {}
@@ -95,6 +119,13 @@ def build_event_matrix(df: pd.DataFrame, config: dict | None = None) -> pd.DataF
         gap_k_atr=float(cfg.get("void_gap_k_atr", 1.6)),
         fill_bars=int(cfg.get("fill_bars", cfg.get("void_fill_bars", 6))),
         ema_span=int(cfg.get("void_ema_span", 20)),
+    )
+    out["E_vol_compress_expand"] = event_vol_compress_expand(
+        df,
+        compress_window=int(cfg.get("compress_window", 96)),
+        compress_q=float(cfg.get("compress_q", 0.1)),
+        expand_k=float(cfg.get("expand_k", 1.6)),
+        lookahead_N=int(cfg.get("expand_lookahead_N", 8)),
     )
     out["event_mask"] = out.any(axis=1)
     return out
