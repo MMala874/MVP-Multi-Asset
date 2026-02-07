@@ -50,6 +50,7 @@ def main() -> None:
     print(f"coverage={len(ds) / len(ohlc):.4%}")
     print(f"pos_rate={ds['label'].mean():.4f}")
     print(f"year_counts={counts}")
+    print("event_engine=causal_state_machine")
     print(f"saved={args.out}")
 
 
