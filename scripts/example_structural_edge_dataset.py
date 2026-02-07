@@ -1,38 +1,32 @@
+from __future__ import annotations
+
 import argparse
-from pathlib import Path
 
-from edge_discovery.dataset_builder import build_research_dataset
 from edge_discovery.data_io import load_ohlc_csv
+from edge_discovery.dataset_builder import build_research_dataset
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--csv", required=True, help="Path to OHLCV CSV (M15)")
-    ap.add_argument("--out_dir", default="outputs", help="Output directory")
+    ap.add_argument("--csv", required=True)
+    ap.add_argument("--out_dir", required=True)
+    ap.add_argument("--k_impulse", type=float, default=1.5)
+    ap.add_argument("--tp_atr", type=float, default=1.2)
+    ap.add_argument("--sl_atr", type=float, default=1.0)
+    ap.add_argument("--horizon", type=int, default=10)
     args = ap.parse_args()
 
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
     ohlc = load_ohlc_csv(args.csv)
-    ds = build_research_dataset(ohlc, add_label=True)
-    if "label" not in ds.columns:
-        raise ValueError("build_research_dataset must produce a 'label' column for conditional edge ML")
-
-    export_df = ds.reset_index(names="timestamp")
-    export_df["timestamp"] = export_df["timestamp"].dt.tz_convert("UTC")
-
-    print(export_df.head(5).to_string())
-    print(f"Rows: {len(export_df)} | Columns: {len(export_df.columns)}")
-
-    export_df.to_csv(out_dir / "research_dataset.csv", index=False)
-    print(f"Saved: {out_dir / 'research_dataset.csv'}")
-
-    try:
-        export_df.to_parquet(out_dir / "research_dataset.parquet", index=False)
-        print(f"Saved: {out_dir / 'research_dataset.parquet'}")
-    except Exception as e:
-        print(f"[WARN] Parquet not saved (install pyarrow): {e}")
+    build_research_dataset(
+        ohlc,
+        config={
+            "k_impulse": args.k_impulse,
+            "tp_atr": args.tp_atr,
+            "sl_atr": args.sl_atr,
+            "horizon": args.horizon,
+        },
+        out_dir=args.out_dir,
+    )
 
 
 if __name__ == "__main__":
