@@ -13,7 +13,10 @@ from sklearn.pipeline import Pipeline
 
 from edge_discovery.cv import build_purged_walk_forward_splits
 
-FORBIDDEN_PATTERNS = re.compile(r"(fwd|mfe|mae|resolution|outcome|future|next|tp|sl)", re.IGNORECASE)
+FORBIDDEN_PATTERNS = re.compile(
+    r"(?:^|[^a-z0-9])(?:fwd|mfe|mae|future|next|resolution|outcome|bars_to_resolution|outcome_type|tp|sl)(?:$|[^a-z0-9])",
+    re.IGNORECASE,
+)
 
 
 def enforce_leakage_firewall(feature_columns: list[str]) -> dict[str, list[str]]:
