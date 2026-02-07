@@ -12,6 +12,13 @@ def test_leakage_firewall_allows_slope_features() -> None:
     assert report["allowed"] == cols
 
 
+def test_leakage_firewall_ignores_diag_columns() -> None:
+    cols = ["feat_x", "diag_fwd_ret_20", "diag_hit_tp1_sl1_H20"]
+    report = enforce_leakage_firewall(cols)
+    assert report["allowed"] == ["feat_x"]
+    assert sorted(report["diagnostic_excluded"]) == sorted(["diag_fwd_ret_20", "diag_hit_tp1_sl1_H20"])
+
+
 @pytest.mark.parametrize(
     "column",
     [
