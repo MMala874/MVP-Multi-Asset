@@ -9,43 +9,57 @@ from edge_discovery.feature_engine import compute_features
 from edge_discovery.labeler import apply_double_barrier_labels
 
 
+def _attach_prev_day_levels(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    day = out.index.normalize()
+    day_high = out["high"].resample("1D").max().shift(1)
+    day_low = out["low"].resample("1D").min().shift(1)
+    out["prev_day_high"] = pd.Series(day_high.reindex(day).to_numpy(), index=out.index)
+    out["prev_day_low"] = pd.Series(day_low.reindex(day).to_numpy(), index=out.index)
+    return out
+
+
 def build_research_dataset(df: pd.DataFrame, config: dict | None = None, out_dir: str | Path | None = None) -> pd.DataFrame:
-    cfg = {
-        "k_impulse": 1.5,
-        "tp_atr": 1.2,
-        "sl_atr": 1.0,
-        "horizon": 10,
-    }
+    cfg = {"tp_atr": 1.2, "sl_atr": 1.0, "horizon": 10}
     if config:
         cfg.update(config)
 
-    events = compute_event_flags(df, k_impulse=float(cfg["k_impulse"]))
-    features = compute_features(df, events=events)
-    any_event = events.any(axis=1)
+    base = _attach_prev_day_levels(df)
+    events = compute_event_flags(base)
+    features = compute_features(base, events=events)
+
+    event_col = "SWEEP_RECLAIM_EXPAND"
+    event_mask = events[event_col].eq(1)
+
     labels = apply_double_barrier_labels(
-        df,
-        any_event,
+        base,
+        event_mask,
         tp_atr=float(cfg["tp_atr"]),
         sl_atr=float(cfg["sl_atr"]),
         horizon=int(cfg["horizon"]),
     )
 
-    ds = pd.concat([events, features, labels], axis=1)
-    ds = ds.loc[any_event]
+    ds = pd.concat([events[[event_col]], features, labels], axis=1)
+    ds = ds.loc[event_mask]
     ds = ds.dropna(subset=["label"])
     ds = ds.dropna(subset=features.columns)
+
     ds.insert(0, "timestamp", ds.index.tz_convert("UTC").strftime("%Y-%m-%dT%H:%M:%SZ"))
 
     if out_dir is not None:
         out = Path(out_dir)
         out.mkdir(parents=True, exist_ok=True)
-        csv_path = out / "research_dataset.csv"
+        csv_path = out / "research_dataset_v2.csv"
+        parquet_path = out / "research_dataset_v2.parquet"
         ds.to_csv(csv_path, index=False)
-        try:
-            ds.to_parquet(out / "research_dataset.parquet", index=False)
-        except Exception:
-            pass
-        print(f"Saved dataset: {csv_path} rows={len(ds)} cols={len(ds.columns)}")
+        ds.to_parquet(parquet_path, index=False)
+
+        year_counts = ds.index.year.value_counts().sort_index().to_dict()
+        print(f"rows={len(ds)}")
+        print(f"label_balance={ds['label'].mean():.6f}")
+        print(f"year_counts={year_counts}")
+        print(f"Saved dataset CSV: {csv_path}")
+        print(f"Saved dataset Parquet: {parquet_path}")
 
     return ds
 
