@@ -40,21 +40,29 @@ def build_research_dataset(df: pd.DataFrame, config: dict | None = None, out_dir
     event_col = "SWEEP_RECLAIM_EXPAND"
     event_mask = events[event_col].eq(1)
 
-    labels = apply_double_barrier_labels(
+    labels_df, diagnostics_df = apply_double_barrier_labels(
         base,
         event_mask,
         tp_atr=float(cfg["tp_atr"]),
         sl_atr=float(cfg["sl_atr"]),
         horizon=int(cfg["horizon"]),
+        include_diagnostics=True,
     )
 
-    ds = pd.concat([events[[event_col]], features, labels], axis=1)
+    ds = pd.concat([events[[event_col]], features, labels_df], axis=1)
     ds = ds.loc[event_mask]
     ds = ds.dropna(subset=["label"])
     ds = ds.dropna(subset=features.columns)
 
     ds.insert(0, "timestamp", ds.index.tz_convert("UTC").strftime("%Y-%m-%dT%H:%M:%SZ"))
     research_ds, diagnostics_ds = _split_leakage_columns(ds)
+    diagnostics_ds = pd.concat(
+        [
+            diagnostics_ds,
+            diagnostics_df.loc[ds.index, ["bars_to_resolution", "outcome_type", "fwd_ret_10", "mfe_10_atr", "mae_10_atr"]],
+        ],
+        axis=1,
+    )
 
     if out_dir is not None:
         out = Path(out_dir)
