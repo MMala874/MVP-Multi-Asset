@@ -7,18 +7,12 @@ import pandas as pd
 from edge_discovery.events import build_event_matrix
 from edge_discovery.features import build_causal_features
 from edge_discovery.labeling import label_tp_sl_first
+from edge_discovery.time_utils import ensure_datetime_index
 
 
 def load_ohlc_csv(path: str) -> pd.DataFrame:
     df = pd.read_csv(path)
-    if "time" in df.columns:
-        df["time"] = pd.to_datetime(df["time"], utc=True, errors="coerce")
-        df = df.loc[df["time"].notna()].set_index("time")
-    elif "timestamp" in df.columns:
-        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
-        df = df.loc[df["timestamp"].notna()].set_index("timestamp")
-    else:
-        raise ValueError("CSV must include time or timestamp column")
+    df = ensure_datetime_index(df)
     for c in ["open", "high", "low", "close"]:
         if c not in df.columns:
             raise ValueError(f"Missing OHLC column: {c}")
@@ -36,6 +30,7 @@ def build_event_dataset(
     min_event_coverage: float = 0.02,
     max_event_coverage: float = 0.20,
 ) -> pd.DataFrame:
+    ohlc = ensure_datetime_index(ohlc)
     events = build_event_matrix(ohlc)
     features = build_causal_features(ohlc)
 
